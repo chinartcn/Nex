@@ -93,18 +93,56 @@ export async function loadExservers(registry, bus, ctxExtras = {}) {
       }
     }
     // server.conf.js 热更新：改动配置无需重启，下次请求即生效
+    // 注意：手机/编辑器多为「原子保存」(写临时文件再 rename 覆盖，或先删后写)，
+    // 直接 watch 文件 + import(文件路径) 会在文件短暂消失的间隙报
+    // "Cannot find module"，且一次保存触发多个 event 会连刷错误。故采用：
+    //   监听目录(rename 不丢 watch) + 防抖合并 event + 读文本用 data URL 求值
+    //   (绕开路径 module resolution 竞态) + ENOENT 静默重试 + 内容去重。
     const confPath = path.join(ROOT, e.path, 'server.conf.js');
     if (fs.existsSync(confPath)) {
       try {
-        const watcher = fs.watch(confPath);
-        watcher.on('change', async () => {
-          try {
-            const c = await import(pathToFileURL(confPath).href + `?t=${Date.now()}`);
-            e.config = c.default ?? c;
-            console.log(`[exserver:${e.name}] server.conf.js 已热更新`);
-          } catch (err) {
-            console.error(`[exserver:${e.name}] 热更新失败：${err.message}`);
+        const confDir = path.dirname(confPath);
+        let reloadTimer = null;
+        let lastSrc = null;
+        const attemptReload = async (tries = 8) => {
+          for (let i = 0; i < tries; i++) {
+            let src;
+            try {
+              src = fs.readFileSync(confPath, 'utf8');
+            } catch (err) {
+              if (err.code === 'ENOENT') {
+                // 「先删后写」间隙：稍后重试，不报错刷屏
+                await new Promise((r) => setTimeout(r, 120));
+                continue;
+              }
+              console.error(`[exserver:${e.name}] 热更新读取失败：${err.message}`);
+              return;
+            }
+            if (src === lastSrc) return; // 内容未变，跳过
+            try {
+              // data URL 求值：server.conf.js 为纯配置(无相对 import)，
+              // 只要此刻读到完整字节即可加载，不受 rename 间隙影响。
+              const href = 'data:text/javascript;base64,' + Buffer.from(src).toString('base64');
+              const c = await import(href);
+              e.config = c.default ?? c;
+              lastSrc = src;
+              console.log(`[exserver:${e.name}] server.conf.js 已热更新`);
+              return;
+            } catch (err) {
+              // 语法错误等真实失败：打印一次即可，不重试
+              console.error(`[exserver:${e.name}] 热更新失败：${err.message}`);
+              return;
+            }
           }
+          // 多次重试仍读不到文件（可能被删除/移动）：静默放弃，退化为重启生效
+        };
+        fs.watch(confDir, (_event, filename) => {
+          if (filename && path.basename(filename) !== 'server.conf.js') return;
+          if (reloadTimer) clearTimeout(reloadTimer);
+          reloadTimer = setTimeout(() => {
+            reloadTimer = null;
+            attemptReload();
+          }, 150); // 防抖：把一次保存产生的多个 event 合并成一次加载
         });
       } catch {
         /* 部分平台 fs.watch 不可用，忽略即退化为重启生效 */
