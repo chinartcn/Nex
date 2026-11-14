@@ -68,11 +68,15 @@ export function createServer(registry, config, deps) {
         try {
           const r = await h.fn(req, url, h.ctx);
           if (r && typeof r === 'object' && 'status' in r) {
-            const body = typeof r.body === 'string' ? Buffer.from(r.body, 'utf8') : r.body;
-            res.writeHead(r.status, {
-              'content-type': r.type || 'text/plain; charset=utf-8',
-            });
-            res.end(body);
+            const type = r.type || 'text/plain; charset=utf-8';
+            const raw = typeof r.body === 'string' ? Buffer.from(r.body, 'utf8') : r.body;
+            // 服务端渲染的 HTML（如 Markdown 钩子产物）也注入总线客户端，
+            // 使其能收到后端变更的 __nex:reload 广播自动刷新（3000/3001 通吃）。
+            const out = /^text\/html/i.test(type) && raw
+              ? Buffer.from(injectNexScripts(raw.toString('utf8')), 'utf8')
+              : raw;
+            res.writeHead(r.status, { 'content-type': type });
+            res.end(out);
             return;
           }
         } catch (err) {
@@ -332,20 +336,24 @@ function tryDevStatic(rel) {
   return fp;
 }
 
+const NEX_SCRIPTS =
+  '\n<script src="/_navext/bus.js"></script>\n' +
+  '<script src="/_navext/navext.js"></script>\n' +
+  '<script src="/_navext/bootstrap.js"></script>\n';
+
+// 给 HTML 注入总线客户端 + 规范化 API + 引导脚本（静态页与 SSR 钩子产物共用）
+function injectNexScripts(str) {
+  return str.includes('</body>')
+    ? str.replace('</body>', NEX_SCRIPTS + '</body>')
+    : str + NEX_SCRIPTS;
+}
+
 function sendFile(res, fp, inject) {
   const ext = path.extname(fp);
   const ct = MIME[ext] || 'application/octet-stream';
   let data = fs.readFileSync(fp);
   if (inject) {
-    const script =
-      '\n<script src="/_navext/bus.js"></script>\n' +
-      '<script src="/_navext/navext.js"></script>\n' +
-      '<script src="/_navext/bootstrap.js"></script>\n';
-    const str = data.toString('utf8');
-    data = Buffer.from(
-      str.includes('</body>') ? str.replace('</body>', script + '</body>') : str + script,
-      'utf8'
-    );
+    data = Buffer.from(injectNexScripts(data.toString('utf8')), 'utf8');
   }
   res.writeHead(200, { 'content-type': ct + (ct.startsWith('text') ? '; charset=utf-8' : '') });
   res.end(data);

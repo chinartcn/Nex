@@ -127,6 +127,14 @@ export async function loadExservers(registry, bus, ctxExtras = {}) {
               e.config = c.default ?? c;
               lastSrc = src;
               console.log(`[exserver:${e.name}] server.conf.js 已热更新`);
+              // 推送刷新信号：prod(3000 直连) 无 Vite watcher，靠总线通知前端自动刷新
+              if (bus && typeof bus.broadcast === 'function') {
+                bus.broadcast({
+                  type: '__nex:reload',
+                  scope: 'global',
+                  payload: { reason: 'exserver-config', ext: e.name },
+                });
+              }
               return;
             } catch (err) {
               // 语法错误等真实失败：打印一次即可，不重试

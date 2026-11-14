@@ -1,11 +1,12 @@
 import http from 'node:http';
+import path from 'node:path';
 import { ROOT } from '../config.js';
 
 // Phase 4：Vite 热更新接入（仅 dev 生效）
 // 启动一个独立 Vite 开发服务器（默认 3001），直接消费 .ts/.tsx 源码并提供 HMR；
 // 把 Nex 专属端点（/api、/@NavExt-ws、/_navext、/dist）代理回主服务（默认 3000）。
 // 浏览器开发地址：http://localhost:3001
-export async function startVite(config, mainPort) {
+export async function startVite(config, mainPort, bus) {
   if (config.mode !== 'dev') return null;
 
   const { createServer } = await import('vite');
@@ -104,6 +105,40 @@ export async function startVite(config, mainPort) {
   });
 
   await vite.listen();
+
+  // 「内容/后端变更 → 前端自动刷新」：复用 Vite 的 chokidar watcher 检测文件变化，
+  // 再经两条互补通道通知浏览器：
+  //   - Nex 总线 __nex:reload：覆盖 proxy 转发的 SSR 页(.md)、以及 3000 直连页
+  //     （这些页注入了 bus.js 但没有 @vite/client，收不到 Vite 的 HMR）
+  //   - Vite.ws full-reload：覆盖 Vite 直出、注入了 @vite/client 的前端模块页
+  // 前端源码(.ts/.tsx)仍走 Vite 原生局部 HMR，不在此触发整页刷新。
+  const FRONT_MODULE = /\.(ts|tsx|jsx|css)$/i;
+  const SKIP_DIR = /^(Exjs|NavExt-TS|NavExt-React|NavExt-vite|NavExt-sub|NavExt-esbuild|node_modules|dist)\//;
+  const CONTENT = /\.(md|html)$|^Exserver\/|^page\/|(^|\/)(nav-ext\.config|conf|sub|confi)\.js$/i;
+  // server.conf.js 由 Exserver 运行时专门监听（负责更新内存 config 并自行广播），
+  // 这里跳过，避免同一改动产生重复刷新信号。
+  const EXSERVER_CONF = /(^|\/)server\.conf\.js$/i;
+  let reloadTimer = null;
+  vite.watcher.on('all', (_event, absFile) => {
+    const rel = path.relative(ROOT, absFile).replace(/\\/g, '/');
+    if (EXSERVER_CONF.test(rel)) return;
+    if (!CONTENT.test(rel) || FRONT_MODULE.test(rel) || SKIP_DIR.test(rel)) return;
+    if (reloadTimer) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      reloadTimer = null;
+      // 通道1：Nex 总线（3000/3001 通吃，含 proxy 的 SSR 页）
+      if (bus && typeof bus.broadcast === 'function') {
+        bus.broadcast({
+          type: '__nex:reload',
+          scope: 'global',
+          payload: { reason: 'content-change', file: rel },
+        });
+      }
+      // 通道2：Vite 原生 full-reload（Vite 直出页）
+      try { vite.ws.send({ type: 'full-reload', path: '*' }); } catch { /* ws 未就绪时忽略 */ }
+    }, 180);
+  });
+
   const url = vite.resolvedUrls?.local?.[0] || `http://localhost:${config.vite?.port || 3001}/`;
   console.log(`[Nex] Vite dev server: ${url} (HMR for Exjs & page)`);
   return vite;

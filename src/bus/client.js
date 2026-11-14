@@ -9,8 +9,18 @@ export const BUS_CLIENT_SOURCE = `
     var set = handlers.get(type);
     if (set) set.forEach(function (fn) { fn(env.payload, env); });
   }
+  var reloading = false;
   conn.onmessage = function (ev) {
     var env; try { env = JSON.parse(ev.data); } catch (e) { return; }
+    // 框架内部信号：后端配置/内容变更后由总线推送，页面自动刷新（无需手动 F5）
+    // 走总线而非 Vite HMR：proxy 转发的服务端渲染页(如 .md)没有 @vite/client，
+    // 但注入了本脚本，故 3000 / 3001 都能收到。reloading 防抖避免一次改动重复刷新。
+    if (env && env.type === '__nex:reload') {
+      if (reloading) return;
+      reloading = true;
+      try { location.reload(); } catch (e) {}
+      return;
+    }
     if (env && typeof env.type === 'string') emit(env.type, env);
   };
 

@@ -53,7 +53,7 @@ async function main() {
   });
 
   const port = config.server?.port ?? 3000;
-  await startVite(config, port); // Phase 4：Vite 热更（仅 dev），开发地址 3001
+  await startVite(config, port, bus); // Phase 4：Vite 热更（仅 dev），开发地址 3001
 
   hub.server('info', `[Nex] mode=${config.mode} root=${ROOT}`);
   hub.server('info', `[Nex] security.fsWrite=${security.policy.fsWrite} (默认最小授权)`);
