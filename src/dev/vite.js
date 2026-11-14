@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { ROOT } from '../config.js';
 
 // Phase 4：Vite 热更新接入（仅 dev 生效）
@@ -46,10 +47,43 @@ export async function startVite(config, mainPort) {
     },
   };
 
+  // 开发态：把所有 .md 请求转发回主服务（默认 3000），由 Exserver 的 onRequest
+  // 钩子渲染。否则 Vite 会把 .md 当静态文件原样返回（如根目录 README.md、
+  // 以及任何不在 /page 下的 .md），与 prod(3000) 行为不一致。
+  // 必须插在 Vite 自身静态中间件之前，否则会被先当成文件吐出。
+  const nexMdProxy = {
+    name: 'nex-md-proxy',
+    configureServer(server) {
+      const handler = (req, res, next) => {
+        const url = req.url || '';
+        const pathname = url.split('?')[0];
+        if (!/\.md$/i.test(pathname)) return next();
+        const opts = {
+          host: '127.0.0.1',
+          port: mainPort,
+          method: req.method,
+          path: url,
+          headers: req.headers,
+        };
+        const proxyReq = http.request(opts, (proxyRes) => {
+          res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+          proxyRes.pipe(res);
+        });
+        proxyReq.on('error', (err) => {
+          if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
+          res.end('markdown proxy error: ' + err.message);
+        });
+        req.pipe(proxyReq);
+      };
+      // 插到中间件栈最前，抢在 Vite 静态服务之前拦截 .md
+      server.middlewares.stack.unshift({ route: '', handle: handler });
+    },
+  };
+
   const vite = await createServer({
     root: ROOT,
     configFile: false,
-    plugins: [...reactPlugin, injectNex, rewriteHome],
+    plugins: [...reactPlugin, injectNex, rewriteHome, nexMdProxy],
     server: {
       port: config.vite?.port || 3001,
       strictPort: false,
