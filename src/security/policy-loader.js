@@ -7,7 +7,7 @@ import { ROOT } from '../config.js';
 const DEFAULT_POLICY = {
   fsWrite: false,
   cors: [],
-  csp: "default-src 'self'",
+  csp: "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:",
 };
 
 // 安全策略可经 Exserver 拓展/定义；核心不内置硬编码规则

@@ -5,7 +5,10 @@ import { ROOT } from '../config.js';
 
 // 默认最小授权（决议 Q4）：写文件默认关，由 Exserver 安全策略显式开启
 const DEFAULT = {
-  csp: "default-src 'self'",
+  // 默认最小授权：脚本仍锁 'self'（挡 XSS），但放开内联样式——
+  // Nex 的 Exjs UI 多为 React，其 style={{}} 编译后即内联 style 属性，
+  // 若收紧 style-src 会导致所有内置/扩展 UI 的样式失效（含 Markdown 标题色）。
+  csp: "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:",
   cors: { origins: ['*'], methods: ['GET', 'POST', 'OPTIONS'] },
   fsWrite: false,
   allowFsWrite: [],
