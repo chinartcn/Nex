@@ -19,6 +19,17 @@ export class WebSocketConnection extends EventEmitter {
     socket.on('data', (c) => this._onData(c));
     socket.on('close', () => this._onClose());
     socket.on('error', () => this._onClose());
+    // http.Server 的 upgrade socket 默认 allowHalfOpen：对端仅发 FIN（不发 WS 关闭帧，
+    // 例如浏览器关标签页）时只触发 'end' 而不会 'close'，需主动收尾避免半开泄漏
+    socket.on('end', () => this.close());
+  }
+
+  // 底层 socket 关闭/出错时调用：标记断开并向上广播 close（供 Bus 清理客户端）
+  // 与主动 close() 共用 this.closed 幂等，避免重复触发
+  _onClose() {
+    if (this.closed) return;
+    this.closed = true;
+    this.emit('close');
   }
 
   _onData(chunk) {
