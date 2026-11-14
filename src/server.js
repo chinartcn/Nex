@@ -36,7 +36,7 @@ const DEV_EXT = new Set([
 ]);
 
 export function createServer(registry, config, deps) {
-  const { bus, exjs, security, subpages, log } = deps;
+  const { bus, exjs, security, subpages, log, requestHooks = [] } = deps;
   const devMode = config.mode === 'dev';
 
   const server = http.createServer(async (req, res) => {
@@ -57,6 +57,29 @@ export function createServer(registry, config, deps) {
       res.writeHead(403, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, reason: 'blocked by security policy' }));
       return;
+    }
+
+    // ---- Exserver 请求拦截钩子（onRequest）----
+    // 在核心 API / 静态处理之前执行；钩子返回 {status,type,body} 即短路响应，
+    // 返回 undefined / null 则放行交由后续管线（如 Markdown 渲染器拦截 *.md）
+    // 核心 /api 与 /_navext 内部路由不受钩子影响，保证控制面安全
+    if (requestHooks.length && !p.startsWith('/api/') && !p.startsWith('/_navext/')) {
+      for (const h of requestHooks) {
+        try {
+          const r = await h.fn(req, url, h.ctx);
+          if (r && typeof r === 'object' && 'status' in r) {
+            const body = typeof r.body === 'string' ? Buffer.from(r.body, 'utf8') : r.body;
+            res.writeHead(r.status, {
+              'content-type': r.type || 'text/plain; charset=utf-8',
+            });
+            res.end(body);
+            return;
+          }
+        } catch (err) {
+          if (log) log.server('error', `[request-hook:${h.id}]`, err);
+          else console.error(`[request-hook:${h.id}]`, err);
+        }
+      }
     }
 
     // ---- API ----
@@ -228,6 +251,23 @@ export function createServer(registry, config, deps) {
       if (!fp) {
         res.writeHead(403);
         res.end('forbidden');
+        return;
+      }
+      return sendFile(res, fp, false);
+    }
+    // ---- Exserver 静态资源（如 Markdown 渲染器的 styles.css）----
+    if (p.startsWith('/_navext/exserver/')) {
+      const rest = p.slice('/_navext/exserver/'.length);
+      const [name, ...parts] = rest.split('/');
+      const dir = path.join(ROOT, 'Exserver', name);
+      const fp = path.resolve(dir, parts.join('/'));
+      if (
+        !fp.startsWith(path.resolve(dir)) ||
+        !fs.existsSync(fp) ||
+        !fs.statSync(fp).isFile()
+      ) {
+        res.writeHead(404);
+        res.end('not found');
         return;
       }
       return sendFile(res, fp, false);

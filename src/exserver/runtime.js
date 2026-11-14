@@ -81,6 +81,7 @@ export async function loadExservers(registry, bus, ctxExtras = {}) {
   const ordered = topo(loaded);
   for (const e of ordered) {
     const ctx = makeCtx(e, bus, ctxExtras);
+    e.ctx = ctx; // 挂回 loaded 条目，供 index.js 构造请求钩子（onRequest）
     if (typeof e.mod.onReady === 'function') {
       try {
         e.mod.onReady(ctx);
