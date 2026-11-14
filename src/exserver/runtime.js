@@ -13,8 +13,11 @@ function makeCtx(ext, bus, ctxExtras = {}) {
   return {
     ext,
     bus,
-    config: ext.config || {},
     ...ctxExtras,
+    // 用 getter 实时读取，配合 server.conf.js 文件监听热更新（改动无需重启）
+    get config() {
+      return ext.config || {};
+    },
     fetch: async (url, opts = {}) => {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), opts.timeout || 10000);
@@ -87,6 +90,24 @@ export async function loadExservers(registry, bus, ctxExtras = {}) {
         e.mod.onReady(ctx);
       } catch (err) {
         console.error(`[exserver:${e.name}] onReady error`, err);
+      }
+    }
+    // server.conf.js 热更新：改动配置无需重启，下次请求即生效
+    const confPath = path.join(ROOT, e.path, 'server.conf.js');
+    if (fs.existsSync(confPath)) {
+      try {
+        const watcher = fs.watch(confPath);
+        watcher.on('change', async () => {
+          try {
+            const c = await import(pathToFileURL(confPath).href + `?t=${Date.now()}`);
+            e.config = c.default ?? c;
+            console.log(`[exserver:${e.name}] server.conf.js 已热更新`);
+          } catch (err) {
+            console.error(`[exserver:${e.name}] 热更新失败：${err.message}`);
+          }
+        });
+      } catch {
+        /* 部分平台 fs.watch 不可用，忽略即退化为重启生效 */
       }
     }
     if (typeof e.mod.onMessage === 'function') {

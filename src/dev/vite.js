@@ -60,6 +60,9 @@ export async function startVite(config, mainPort) {
         '/@NavExt-ws': { target: `ws://localhost:${mainPort}`, ws: true, changeOrigin: true },
         '/_navext': { target: `http://localhost:${mainPort}`, changeOrigin: true },
         '/dist': { target: `http://localhost:${mainPort}`, changeOrigin: true },
+        // 内容路由（含 .md 渲染钩子）也代理回主服务，保证 dev 与 prod 渲染一致
+        '/page': { target: `http://localhost:${mainPort}`, changeOrigin: true },
+        '/preview': { target: `http://localhost:${mainPort}`, changeOrigin: true },
       },
     },
     optimizeDeps: { entries: ['Exjs/**/*.{ts,tsx}'] },
