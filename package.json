@@ -1,0 +1,21 @@
+{
+  "name": "nex",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "NavExt 2.0 — 现代化导航/扩展平台（Exserver/Exjs + 统一总线）",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "build": "node NavExt-esbuild/build.mjs"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "esbuild": "^0.21.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.21"
+  }
+}

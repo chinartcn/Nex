@@ -1,0 +1,5 @@
+.exjs-example {
+  padding: 8px 12px;
+  border: 1px solid var(--accent, #4f6ef7);
+  border-radius: 6px;
+}
