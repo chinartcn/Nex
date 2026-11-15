@@ -20,6 +20,9 @@ export async function startVite(config, mainPort, bus) {
   }
 
   // 把总线客户端与引导脚本注入所有 HTML（经代理回主服务）
+  // 注：React Refresh preamble 不在此注入 —— Nex 页面多经 /page 代理由主服务
+  // 提供 HTML，不走 Vite 的 transformIndexHtml；改由 bootstrap.js 在动态
+  // import Exjs 之前按需从 /@react-refresh 安装（见 exjs/runtime.js）。
   const injectNex = {
     name: 'nex-inject',
     transformIndexHtml(html) {
@@ -58,6 +61,12 @@ export async function startVite(config, mainPort, bus) {
       const handler = (req, res, next) => {
         const url = req.url || '';
         const pathname = url.split('?')[0];
+        // 浏览器自动请求 /favicon.ico；Vite 未提供会 404，直接空响应避免控制台红错
+        if (pathname === '/favicon.ico') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
         if (!/\.md$/i.test(pathname)) return next();
         const opts = {
           host: '127.0.0.1',
@@ -91,7 +100,13 @@ export async function startVite(config, mainPort, bus) {
       // HMR 用专属路径，避免抢占 /@NavExt-ws 的 upgrade（总线 WS 经代理回 3000）
       hmr: { path: '/__nex_hmr' },
       proxy: {
-        '/api': { target: `http://localhost:${mainPort}`, changeOrigin: true },
+        '/api': {
+          target: `http://localhost:${mainPort}`,
+          changeOrigin: true,
+          // 标记「来自 Vite 开发入口」：主服务的 /api/exjs 据此下发 dev 源码清单
+          // （.ts/.tsx 只有 Vite 能转译；3000 直连不下发，避免 404 报错）
+          headers: { 'x-nex-via-vite': '1' },
+        },
         '/@NavExt-ws': { target: `ws://localhost:${mainPort}`, ws: true, changeOrigin: true },
         '/_navext': { target: `http://localhost:${mainPort}`, changeOrigin: true },
         '/dist': { target: `http://localhost:${mainPort}`, changeOrigin: true },

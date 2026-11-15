@@ -26,7 +26,9 @@ export function createExjsRuntime(registry, root = ROOT) {
               name: e.name,
               enabled: e.enabled,
               entry: 'index.ts',
-              base: '/Exjs',
+              // 必须带上扩展目录名：Vite 的模块图按 /Exjs/<name>/index.ts 解析，
+              // 少了它 bootstrap 会去 import('/Exjs/index.ts') 直接 404。
+              base: '/Exjs/' + e.name,
               built: false,
               dev: true,
             };
@@ -81,8 +83,28 @@ export const BOOTSTRAP_SOURCE = `
   try {
     // 加载 NavExt-sub 路由库（暴露 global.__NexRouter → Nex.router）
     try { await import('/_navext/sub.js'); } catch (e) { console.warn('[Nex] sub.js load failed', e); }
+    // Exjs 是 UI 扩展，需要页面预留挂载点。纯内容页（如服务端渲染的 .md）
+    // 没有挂载点，加载扩展毫无意义且会产生动态 import 报错，直接跳过。
+    var host = document.querySelector('#exjs-panel') || document.querySelector('[data-nex-exjs]');
+    if (!host) return;
     var res = await fetch('/api/exjs');
     var data = await res.json();
+    if (!data.extensions || !data.extensions.length) return;
+    // @vitejs/plugin-react 要求在运行被其转换的模块前安装 React Refresh preamble。
+    // Nex 的 Exjs 是运行时「动态 import」的，页面又是自定义 HTML（不经 Vite
+    // 默认入口转换），插件无法自动注入 preamble，否则报
+    // "@vitejs/plugin-react can't detect preamble"。这里按需从 Vite 安装：
+    // /@react-refresh 是 Vite(3001) 的同源虚拟模块；3000 直连无此模块时静默跳过。
+    if (!window.__vite_plugin_react_preamble_installed__) {
+      try {
+        var rr = await import('/@react-refresh');
+        var R = rr.default || rr;
+        if (R && typeof R.injectIntoGlobalHook === 'function') R.injectIntoGlobalHook(window);
+        window.$RefreshReg$ = function () {};
+        window.$RefreshSig$ = function () { return function (t) { return t; }; };
+        window.__vite_plugin_react_preamble_installed__ = true;
+      } catch (e) { /* 非 Vite 环境：无 /@react-refresh，忽略 */ }
+    }
     for (var ext of data.extensions) {
       if (!ext.enabled || !ext.entry) continue;
       try {

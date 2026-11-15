@@ -57,8 +57,12 @@ export class SecurityPolicy {
     return m.default ?? m;
   }
 
-  // 应用到所有响应的头（CSP / CORS）
+  // 应用到所有响应的头（CSP / CORS / 缓存）
   applyHeaders(res) {
+    // SSR 页面与配置热更新依赖「每次都取最新响应」。原先无缓存头，浏览器会用
+    // 启发式缓存复用 CSP 放宽之前的旧响应（内联样式被拦 → 标题变黑），
+    // 且 location.reload() 也可能命中缓存。统一禁用缓存根除这类「颜色回退」。
+    res.setHeader('Cache-Control', 'no-store');
     if (this.policy.csp) res.setHeader('Content-Security-Policy', this.policy.csp);
     const origins = this.policy.cors?.origins || [];
     res.setHeader(

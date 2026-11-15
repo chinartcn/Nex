@@ -11,7 +11,15 @@
   margin: 0 auto;
   padding: 48px 24px;
 }
-.nx-md h1, .nx-md h2, .nx-md h3 { line-height: 1.3; margin: 1.6em 0 .6em; }
+/* 标题着色（兜底防线）：优先读渲染器按配置注入的 --accent-heading；
+   若内联 <style> / 内联 style 属性被 CSP 拦截，或浏览器缓存了旧 CSP 响应，
+   var() 回退到默认品牌色 —— 标题绝不会退回 .nx-md 的深色正文色（「变黑」）。
+   外部样式表只受 style-src 'self' 约束，比内联样式更稳。 */
+.nx-md h1, .nx-md h2, .nx-md h3, .nx-md h4, .nx-md h5, .nx-md h6 {
+  line-height: 1.3;
+  margin: 1.6em 0 .6em;
+  color: var(--accent-heading, #4f6ef7);
+}
 .nx-md code {
   background: rgba(127,127,127,.14);
   padding: .15em .4em;

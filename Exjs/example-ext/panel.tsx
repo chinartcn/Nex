@@ -11,11 +11,15 @@ export function Panel({ title }: { title: string }) {
     const Nex: any = (window as any).Nex;
     if (!Nex) return;
 
-    const fmtEntry = (e: any) => ({
-      ...e,
-      ts: new Date(e.time).toLocaleTimeString(),
-      color: e.source === 'client' ? '#2a8' : e.level === 'error' ? '#c33' : '#557',
-    });
+    const fmtEntry = (raw: any) => {
+      const e = raw || {};
+      return {
+        ...e,
+        ts: new Date(e.time || Date.now()).toLocaleTimeString(),
+        color: e.source === 'client' ? '#2a8' : e.level === 'error' ? '#c33' : '#557',
+        msg: e.msg || '',
+      };
+    };
 
     // 初始拉取已汇聚的日志
     fetch('/api/logs')

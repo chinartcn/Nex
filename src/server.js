@@ -101,8 +101,13 @@ export function createServer(registry, config, deps) {
       return;
     }
     if (req.method === 'GET' && p === '/api/exjs') {
+      // dev 模式下 Exjs 的 .ts/.tsx 源码只能由 Vite(3001) 转译，3000 直连
+      // 无法加载（会 404）。故仅在经 Vite 代理（带 x-nex-via-vite 头）时
+      // 下发 dev 源码清单；直连 3000 返回空清单，避免无意义的 404 与报错。
+      const viaVite = req.headers['x-nex-via-vite'] === '1';
+      const list = devMode && !viaVite ? [] : exjs.manifest(devMode);
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ extensions: exjs.manifest(devMode) }));
+      res.end(JSON.stringify({ extensions: list, viaVite, devMode }));
       return;
     }
 

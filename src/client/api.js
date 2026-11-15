@@ -23,9 +23,12 @@ export const CLIENT_API_SOURCE = `
     if (bus()) bus().send('client-log', { level: level, args: args, t: Date.now() });
   };
   // 订阅统一日志流（server + client 汇聚事件）
+  // 注意：NexBus.on(type, fn) 的回调签名是 (payload, env)，第一个参数已是
+  // 信封里的 payload（日志条目）而非整个信封；取 env.payload 会得到 undefined，
+  // 导致订阅方读 e.time 抛错。这里直接透传 payload。
   var logOn = function (cb) {
     if (!bus()) return function () {};
-    return bus().on('log:event', function (env) { cb(env.payload); });
+    return bus().on('log:event', function (payload) { cb(payload); });
   };
 
   var Nex = {
@@ -106,7 +109,10 @@ export const CLIENT_API_SOURCE = `
           })();
         } else if (it && typeof it.next === 'function') {
           (function loop() {
-            it.next().then(function (r) {
+            // 同步迭代器（如数组 .values()）返回 {value,done}，异步迭代器返回
+            // Promise；统一用 Promise.resolve 包一层，兼容两者，避免
+            // "it.next(...).then is not a function"。
+            Promise.resolve(it.next()).then(function (r) {
               if (r.done) { push('', true); return; }
               push(r.value, false); loop();
             });
@@ -123,6 +129,7 @@ export const CLIENT_API_SOURCE = `
     },
   };
 
+  logFn.on = logOn; // 兼容文档中的 Nex.log.on(cb) 写法
   global.Nex = Nex;
 })(window);
 `;

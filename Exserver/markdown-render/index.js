@@ -8,6 +8,10 @@
  *   2. 用 onRequest 钩子拦截一类 URL（这里是 *.md），自己读文件生成响应；
  *   3. 安全：转义用户内容 + 限制体积，避免 XSS 与内存膨胀；路径经 isPathSafe 兜底。
  *
+ * 着色采用「双保险」：内联 style（配置色）+ 外部样式表的
+ * var(--accent-heading, 默认色)。这样即使浏览器缓存了旧 CSP 响应、
+ * 或内联样式被策略拦截，标题仍是品牌色，不会退回深色正文色（表现为「变黑」）。
+ *
  * 真项目里请用 markdown-it / marked；这里手写一份，保持「零依赖」的示例性质。
  */
 
@@ -15,6 +19,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from '../../src/config.js';
 import { isPathSafe } from '../../src/security/core.js';
+
+const DEFAULT_ACCENT = '#4f6ef7';
+
+/* ── 配置颜色校验 ──
+ * 只允许合法 CSS 颜色。若配置写成 undefined / 空串 / 含分号的注入串，
+ * 直接拼进 style 会得到无效颜色（浏览器忽略 → 标题退回深色正文色，
+ * 看起来就是「颜色丢失」）。这里统一兜底为默认品牌色。 */
+function safeColor(v) {
+  if (typeof v !== 'string') return DEFAULT_ACCENT;
+  const s = v.trim();
+  if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;                        // #rgb / #rrggbb / #rrggbbaa
+  if (/^(rgb|rgba|hsl|hsla)\(\s*[\d.%\s,/+-]+\s*\)$/i.test(s)) return s;
+  if (/^[a-zA-Z]{3,20}$/.test(s)) return s;                            // 命名色 / transparent / currentColor
+  return DEFAULT_ACCENT;
+}
 
 /* ── 极简 Markdown → HTML ── */
 function esc(s) {
@@ -96,7 +115,7 @@ export function onRequest(req, url, ctx) {
 
   const cfg = ctx.config || {};
   const maxBytes = cfg.maxBytes || 262144;
-  const accent = cfg.accentHeading || '#4f6ef7';
+  const accent = safeColor(cfg.accentHeading || DEFAULT_ACCENT);
 
   // URL 路径 → 站点相对路径，isPathSafe 做穿越兜底
   const rel = url.pathname;
@@ -120,6 +139,10 @@ export function onRequest(req, url, ctx) {
     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<title>' + esc(title) + '</title>' +
     '<link rel="stylesheet" href="/_navext/exserver/markdown-render/styles.css">' +
+    // 配置色同步写成 CSS 变量：外部样式表用 var(--accent-heading, 默认色) 着色。
+    // 即便这段内联 <style> 或每个 h 标签的 style 属性被 CSP 拦截（如浏览器
+    // 缓存了放宽前的旧 CSP 响应），标题仍由外部 CSS 兜底为品牌色，不会变黑。
+    '<style>.nx-md{--accent-heading:' + accent + '}</style>' +
     '</head><body class="nx-md"><article>' +
     mdToHtml(md, accent) +
     '</article></body></html>';
