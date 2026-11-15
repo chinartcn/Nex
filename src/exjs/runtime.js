@@ -95,7 +95,9 @@ export const BOOTSTRAP_SOURCE = `
     // 默认入口转换），插件无法自动注入 preamble，否则报
     // "@vitejs/plugin-react can't detect preamble"。这里按需从 Vite 安装：
     // /@react-refresh 是 Vite(3001) 的同源虚拟模块；3000 直连无此模块时静默跳过。
-    if (!window.__vite_plugin_react_preamble_installed__) {
+    // 仅开发态需要：/api/exjs 会带回 devMode；prod 走 dist 产物，无需也没
+    // 有 /@react-refresh（3000 无 Vite），跳过可避免无谓的 404 控制台报错。
+    if (data.devMode && !window.__vite_plugin_react_preamble_installed__) {
       try {
         var rr = await import('/@react-refresh');
         var R = rr.default || rr;

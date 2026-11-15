@@ -6,13 +6,29 @@ import { fileURLToPath } from 'node:url';
 export const ROOT = path.resolve(fileURLToPath(import.meta.url), '../..');
 
 // 加载全局 .js 配置；改动后带时间戳热重载
+// 运行模式由「启动命令」决定，优先级：CLI flag > 环境变量 > 配置文件 > prod 兜底。
+//   npm run dev  -> node src/index.js --dev  (Vite HMR，消费 Exjs 的 TS/TSX 源码)
+//   npm start    -> node src/index.js        (生产静态服务，消费 dist/ 构建产物)
+// 这样配置文件里的 mode 只是默认值，不会再出现 start/dev 行为完全一样的情况。
 export async function loadConfig() {
   const file = path.join(ROOT, 'nav-ext.config.js');
-  if (!fs.existsSync(file)) {
-    return { mode: 'prod', server: { port: 3000 }, security: { fsWrite: false } };
+  let config = { mode: 'prod', server: { port: 3000 }, security: { fsWrite: false } };
+  if (fs.existsSync(file)) {
+    const mod = await import(pathToFileURLSafe(file) + `?t=${Date.now()}`);
+    config = mod.default ?? mod;
   }
-  const mod = await import(pathToFileURLSafe(file) + `?t=${Date.now()}`);
-  return mod.default ?? mod;
+
+  const argvMode = process.argv.includes('--dev')
+    ? 'dev'
+    : process.argv.includes('--prod')
+      ? 'prod'
+      : null;
+  const envMode = process.env.NEX_MODE === 'dev' || process.env.NEX_MODE === 'prod'
+    ? process.env.NEX_MODE
+    : null;
+  const mode = argvMode || envMode || config.mode || 'prod';
+
+  return { ...config, mode };
 }
 
 function pathToFileURLSafe(p) {

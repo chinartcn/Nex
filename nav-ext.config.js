@@ -1,6 +1,10 @@
 // 全局统一配置（.js 即配置）。摒弃旧版 .json 配置。
 export default {
-  mode: 'dev',                 // 'dev' | 'prod'
+  // 默认生产模式。运行模式由启动命令决定，不要在这里切换：
+  //   npm start     -> prod（只跑静态服务 :3000，消费 dist/）
+  //   npm run dev   -> dev （额外启动 Vite :3001，消费 Exjs 源码）
+  // 也可用 NEX_MODE=dev|prod 环境变量覆盖（见 src/config.js）。
+  mode: 'prod',                // 'dev' | 'prod'
   server: { host: '0.0.0.0', port: 3000 },
   site: {
     title: 'Nex',

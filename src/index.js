@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { loadConfig, ROOT } from './config.js';
 import { Registry } from './registry.js';
 import { discoverExtensions } from './discover.js';
@@ -52,16 +54,27 @@ async function main() {
     if (conn) bus.send(conn, { type: 'subpage:open:ok', scope: env.scope || 'global', payload: { id, url } });
   });
 
+  const isDev = config.mode === 'dev';
   const port = config.server?.port ?? 3000;
-  await startVite(config, port, bus); // Phase 4：Vite 热更（仅 dev），开发地址 3001
+  await startVite(config, port, bus); // 仅 dev 生效：Vite 热更 :3001；prod 直接返回 null
 
   hub.server('info', `[Nex] mode=${config.mode} root=${ROOT}`);
+  hub.server(
+    'info',
+    isDev
+      ? `[Nex] dev  -> Vite HMR :${config.vite?.port || 3001} + 主服务 :${port}（Exjs 走 TS/TSX 源码，不读 dist）`
+      : `[Nex] prod -> 静态服务 :${port}（Exjs 走 dist/exjs 构建产物，不启动 Vite）`
+  );
   hub.server('info', `[Nex] security.fsWrite=${security.policy.fsWrite} (默认最小授权)`);
+  // 直接 `node src/index.js`（不经过 npm start 的 prestart）时提醒补齐构建产物
+  if (!isDev && !fs.existsSync(path.join(ROOT, 'dist', 'exjs'))) {
+    hub.server('warn', '[Nex] dist/exjs 不存在：Exjs 无构建产物，请先 npm run build（npm start 会自动构建）');
+  }
   server.listen(port, () => {
     hub.server('info', `[Nex] listening on :${port}`);
     hub.server(
       'info',
-      `[Nex] discovered ${registry.list().length} extensions; exjs=${exjs.manifest(config.mode === 'dev').length}; pages=${subpages.list().length}`
+      `[Nex] discovered ${registry.list().length} extensions; exjs=${exjs.manifest(isDev).length}; pages=${subpages.list().length}`
     );
   });
 }
