@@ -8,7 +8,8 @@
     "prestart": "node NavExt-esbuild/build.mjs",
     "start": "node src/index.js",
     "dev": "node src/index.js --dev",
-    "build": "node NavExt-esbuild/build.mjs"
+    "build": "node NavExt-esbuild/build.mjs",
+    "analyze": "node NavExt-esbuild/analyze.mjs"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
