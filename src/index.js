@@ -11,6 +11,7 @@ import { createExjsRuntime } from './exjs/runtime.js';
 import { SubpageRegistry } from './subpage.js';
 import { startVite } from './dev/vite.js';
 import { LogHub } from './log.js';
+import { collectPageDeclarations } from '../NavExt-esbuild/deps.mjs';
 
 async function main() {
   const config = await loadConfig();
@@ -42,7 +43,13 @@ async function main() {
     .filter((e) => e.mod && typeof e.mod.onRequest === 'function')
     .map((e) => ({ id: e.id, fn: e.mod.onRequest, ctx: e.ctx }));
 
-  const server = createServer(registry, config, { bus, exjs, security, subpages, log: hub, requestHooks });
+  // 页面 exjs 白名单（conf.js），供 dev 下 bootstrap 按页裁剪加载范围
+  const pageDecls = await collectPageDeclarations();
+  const pageExjs = new Map(pageDecls.map((p) => [p.id, p.exjs]));
+
+  const server = createServer(registry, config, {
+    bus, exjs, security, subpages, log: hub, requestHooks, pageExjs,
+  });
   bus.attach(server); // @NavExt-ws 全双工总线
 
   // Phase 5：总线中介的子页导航（服务端权威解析，必要时改写 url）

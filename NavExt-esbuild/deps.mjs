@@ -139,6 +139,72 @@ export function planBundles(pages, maximal) {
   return { rows, groups: [...groupsUsed.values()] };
 }
 
+// 从分析结果生成构建 manifest：page -> bundles、bundle -> exjs/files。
+// 同名 bundle 自动合并（多个页面若独有集合相同，复用同一份产物）。
+export function buildManifest({ pages, groups, plan, exts }) {
+  const extMap = new Map(exts.map((e) => [e.id, e]));
+  const groupByName = new Map(groups.map((g) => [g.name, g]));
+  const bundles = new Map();
+
+  const ensure = (name) => {
+    if (!bundles.has(name)) {
+      bundles.set(name, {
+        name,
+        exjs: new Set(),
+        pages: new Set(),
+        shared: name.startsWith('group-'),
+      });
+    }
+    return bundles.get(name);
+  };
+
+  const pageMap = {};
+  for (const row of plan) {
+    const list = [];
+    if (row.shared) {
+      const b = ensure(row.shared);
+      const g = groupByName.get(row.shared);
+      if (g) g.exjs.forEach((id) => b.exjs.add(id));
+      b.pages.add(row.page);
+      list.push(row.shared);
+    }
+    if (row.alone && row.alone.length) {
+      const name = row.alone.join('-');
+      const b = ensure(name);
+      row.alone.forEach((id) => b.exjs.add(id));
+      b.pages.add(row.page);
+      list.push(name);
+    }
+    const p = pages.find((x) => x.id === row.page);
+    pageMap[row.page] = {
+      html: p ? p.html : `page/${row.page}/index.html`,
+      exjs: row.exjs,
+      bundles: list,
+    };
+  }
+
+  const bundleMap = {};
+  for (const [name, b] of bundles) {
+    const exjsList = [...b.exjs];
+    const files = exjsList
+      .map((id) => {
+        const e = extMap.get(id);
+        return e && e.entry ? `Exjs/${id}/${e.entry}` : null;
+      })
+      .filter(Boolean);
+    bundleMap[name] = {
+      name,
+      file: `Exjs/${name}.js`,
+      exjs: exjsList,
+      files,
+      shared: b.shared,
+      pages: [...b.pages],
+    };
+  }
+
+  return { pages: pageMap, bundles: bundleMap };
+}
+
 export async function analyze({ minSupport = 2 } = {}) {
   const pages = await collectPageDeclarations();
   const exts = await collectAvailableExjs();

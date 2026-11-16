@@ -36,8 +36,10 @@ const DEV_EXT = new Set([
 ]);
 
 export function createServer(registry, config, deps) {
-  const { bus, exjs, security, subpages, log, requestHooks = [] } = deps;
+  const { bus, exjs, security, subpages, log, requestHooks = [], pageExjs = new Map() } = deps;
   const devMode = config.mode === 'dev';
+  // prod 下页面来自构建产物 dist/page/，dev 下来自源 page/
+  const pageRoot = devMode ? path.join(ROOT, 'page') : path.join(ROOT, 'dist', 'page');
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
@@ -106,8 +108,39 @@ export function createServer(registry, config, deps) {
       // 下发 dev 源码清单；直连 3000 返回空清单，避免无意义的 404 与报错。
       const viaVite = req.headers['x-nex-via-vite'] === '1';
       const list = devMode && !viaVite ? [] : exjs.manifest(devMode);
+      // prod：构建后每个页面的 bundle 已写进 HTML，清单仅作信息展示，下发给
+      // 构建 manifest 的 bundle 计划；bootstrap 在 prod 不会据此动态 import。
+      let bundles = null;
+      let manifestPages = null;
+      if (!devMode) {
+        try {
+          const mf = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist', 'manifest.json'), 'utf8'));
+          bundles = mf.bundles || null;
+          manifestPages = mf.pages || null;
+        } catch { /* dist 未构建时忽略 */ }
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ extensions: list, viaVite, devMode }));
+      res.end(JSON.stringify({
+        extensions: list,
+        viaVite,
+        devMode,
+        // 页面 → exjs 白名单（dev 下 bootstrap 据此裁剪，收敛到只加载声明的扩展）
+        pageExjs: devMode ? Object.fromEntries(pageExjs) : undefined,
+        bundles,
+        pages: manifestPages,
+      }));
+      return;
+    }
+    // prod 构建 manifest（页面→bundle、bundle→扩展）
+    if (req.method === 'GET' && p === '/api/manifest') {
+      try {
+        const mf = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist', 'manifest.json'), 'utf8'));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(mf));
+      } catch {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'dist/manifest.json 不存在，请先 npm run build' }));
+      }
       return;
     }
 
@@ -291,6 +324,18 @@ export function createServer(registry, config, deps) {
       }
       return sendFile(res, fp, false);
     }
+    // ---- 分组 bundle：/Exjs/<bundle>.js -> dist/Exjs/<bundle>.js ----
+    if (p.startsWith('/Exjs/')) {
+      const rest = p.slice('/Exjs/'.length);
+      const root = path.join(ROOT, 'dist', 'Exjs');
+      const fp = path.resolve(root, rest);
+      if (!fp.startsWith(path.resolve(root)) || !fs.existsSync(fp) || !fs.statSync(fp).isFile()) {
+        res.writeHead(404);
+        res.end('not found');
+        return;
+      }
+      return sendFile(res, fp, false);
+    }
 
     // ---- 静态 page/（HTML 自动注入总线 + 规范化 API + 引导）----
     let rel;
@@ -312,8 +357,13 @@ export function createServer(registry, config, deps) {
       return;
     }
 
-    const fp = path.join(ROOT, rel);
-    if (!isPathSafe(rel, ROOT) || !fs.existsSync(fp) || !fs.statSync(fp).isFile()) {
+    // rel 形如 page/<id>/index.html；prod 映射到 dist/page/<id>/index.html，
+    // dev 映射到源 page/<id>/index.html。路径安全约束在 pageRoot 内。
+    const relNorm = rel.replace(/^\/+/, '');
+    const sub = relNorm.startsWith('page/') ? relNorm.slice('page/'.length) : relNorm;
+    const fp = path.resolve(pageRoot, sub);
+    if (!fp.startsWith(path.resolve(pageRoot) + path.sep) ||
+        !fs.existsSync(fp) || !fs.statSync(fp).isFile()) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('not found');
       return;
