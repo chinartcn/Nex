@@ -59,7 +59,7 @@ export async function collectAvailableExjs() {
       dir: `Exjs/${ent.name}`,
       enabled: conf.enabled !== false,
       entry,
-      built: fs.existsSync(path.join(ROOT, 'dist', 'exjs', ent.name + '.js')),
+      built: fs.existsSync(path.join(ROOT, 'dist', 'Exjs', ent.name + '.js')),
     });
   }
   exts.sort((a, b) => a.id.localeCompare(b.id));

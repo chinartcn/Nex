@@ -361,7 +361,11 @@ export function createServer(registry, config, deps) {
     // dev 映射到源 page/<id>/index.html。路径安全约束在 pageRoot 内。
     const relNorm = rel.replace(/^\/+/, '');
     const sub = relNorm.startsWith('page/') ? relNorm.slice('page/'.length) : relNorm;
-    const fp = path.resolve(pageRoot, sub);
+    let fp = path.resolve(pageRoot, sub);
+    // 目录形式（/page/a1/）补 index.html，与标准静态服务行为一致
+    if (fs.existsSync(fp) && fs.statSync(fp).isDirectory()) {
+      fp = path.join(fp, 'index.html');
+    }
     if (!fp.startsWith(path.resolve(pageRoot) + path.sep) ||
         !fs.existsSync(fp) || !fs.statSync(fp).isFile()) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });

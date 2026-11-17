@@ -3,7 +3,7 @@ import path from 'node:path';
 import { ROOT } from '../config.js';
 
 // Exjs 运行时：收集客户端扩展，提供清单、文件解析、浏览器引导脚本
-// Phase 3：优先使用 esbuild 构建产物（dist/exjs/<name>.js），未构建时回退到 .js 源。
+// Phase 3：优先使用 esbuild 构建产物（dist/Exjs/<name>.js），未构建时回退到 .js 源。
 export function createExjsRuntime(registry, root = ROOT) {
   const exts = registry.list().filter((e) => e.kind === 'exjs');
 
@@ -34,14 +34,14 @@ export function createExjsRuntime(registry, root = ROOT) {
             };
           }
         }
-        const built = path.join(root, 'dist', 'exjs', e.name + '.js');
+        const built = path.join(root, 'dist', 'Exjs', e.name + '.js');
         if (fs.existsSync(built)) {
           return {
             id: e.id,
             name: e.name,
             enabled: e.enabled,
             entry: `${e.name}.js`,
-            base: '/dist/exjs',
+            base: '/dist/Exjs',
             built: true,
           };
         }
@@ -95,7 +95,7 @@ export const BOOTSTRAP_SOURCE = `
 
     // prod 构建页：有 bundle script 则说明扩展已由构建产物加载，不重复 import；
     // 没有 bundle script 则说明该页白名单为空（构建期未生成 script），直接结束。
-    // 关键：prod 绝不能走下面的动态 import 源码分支——dist/exjs 已被分组构建移除，
+    // 关键：prod 绝不能走下面的动态 import 源码分支——dist/Exjs 已被分组构建移除，
     // 且 .ts 源码未经 Vite 转译会 SyntaxError。
     if (!data.devMode) {
       var hasBundles = !!document.querySelector('script[src^="/Exjs/"]');

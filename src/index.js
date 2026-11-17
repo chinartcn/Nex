@@ -70,12 +70,12 @@ async function main() {
     'info',
     isDev
       ? `[Nex] dev  -> Vite HMR :${config.vite?.port || 3001} + 主服务 :${port}（Exjs 走 TS/TSX 源码，不读 dist）`
-      : `[Nex] prod -> 静态服务 :${port}（Exjs 走 dist/exjs 构建产物，不启动 Vite）`
+      : `[Nex] prod -> 静态服务 :${port}（Exjs 走 dist/Exjs 构建产物，不启动 Vite）`
   );
   hub.server('info', `[Nex] security.fsWrite=${security.policy.fsWrite} (默认最小授权)`);
   // 直接 `node src/index.js`（不经过 npm start 的 prestart）时提醒补齐构建产物
-  if (!isDev && !fs.existsSync(path.join(ROOT, 'dist', 'exjs'))) {
-    hub.server('warn', '[Nex] dist/exjs 不存在：Exjs 无构建产物，请先 npm run build（npm start 会自动构建）');
+  if (!isDev && !fs.existsSync(path.join(ROOT, 'dist', 'Exjs'))) {
+    hub.server('warn', '[Nex] dist/Exjs 不存在：Exjs 无构建产物，请先 npm run build（npm start 会自动构建）');
   }
   server.listen(port, () => {
     hub.server('info', `[Nex] listening on :${port}`);
