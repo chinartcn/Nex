@@ -21,6 +21,7 @@ cors: { origins: ['*'], methods: ['GET', 'POST', 'OPTIONS'] }
 fsWrite: false
 allowFsWrite: []
 blockedPaths: ['/admin']
+apiBroadcast: false        // HTTP 触发总线广播：默认关闭
 ```
 
 要点：
@@ -67,7 +68,21 @@ canWriteFs(extId) {
 | `/api/security/policy` | POST | 运行时补丁；**受 `apiWritable` 门控**，默认 403 |
 | `/api/fs/write` | POST | FS 写门禁演示 |
 
-`POST /api/security/policy` 接受 `application/x-www-form-urlencoded`，例如 `fsWrite=true`、`allowFsWrite=exserver:example-ext,exserver:other`。仅当全局 `security.apiWritable === true` 时才允许，否则 403。成功后经总线广播 `security-policy-changed`。
+`POST /api/security/policy` 接受 `application/x-www-form-urlencoded`，例如 `fsWrite=true`、`allowFsWrite=exserver:example-ext,exserver:other`、`apiBroadcast=true`。仅当全局 `security.apiWritable === true` 时才允许，否则 403。成功后经总线广播 `security-policy-changed`。
+
+### 环境变量覆盖（便于部署与测试）
+
+`src/config.js` 支持以下环境变量覆盖安全开关，无需改持久化配置：
+
+| 环境变量 | 作用 |
+| --- | --- |
+| `NEX_API_WRITABLE=1` | 开启 `security.apiWritable`（允许运行时改策略） |
+| `NEX_API_BROADCAST=1` | 开启 `security.apiBroadcast`（允许 HTTP 触发广播） |
+| `NEX_PORT=<n>` | 覆盖监听端口 |
+
+### HTTP 广播门禁
+
+`POST /api/bus/broadcast` 受 `apiBroadcast` 门控（默认关）。未开启返回 403；开启后仍禁止外部伪造保留事件（`__nex:reload` 等）。这是"默认最小授权"在广播能力上的体现。
 
 ## 扩展如何定义安全策略
 

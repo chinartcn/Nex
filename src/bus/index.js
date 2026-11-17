@@ -10,12 +10,29 @@ export class Bus {
 
   // 挂到 http.Server（Phase 1 日志汇聚暂未接）
   attach(httpServer) {
+    let seq = 0;
     attachWebSocketServer(httpServer, (conn) => {
+      // 连接元信息：供 /api/bus/clients 可观测性端点使用
+      conn.id = `ws-${++seq}`;
+      conn.connectedAt = Date.now();
+      conn.remoteAddress = (conn.socket && conn.socket.remoteAddress) || '';
       this.clients.add(conn);
       conn.on('message', (data) => this._onMessage(conn, data));
       conn.on('close', () => this.clients.delete(conn));
     });
   }
+
+  // 可观测性：当前连接快照（不暴露底层 socket）
+  clientInfo() {
+    const now = Date.now();
+    return [...this.clients].map((c) => ({
+      id: c.id || null,
+      remoteAddress: c.remoteAddress || '',
+      connectedAt: c.connectedAt || null,
+      uptimeMs: c.connectedAt ? now - c.connectedAt : null,
+    }));
+  }
+
 
   on(type, fn) {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());

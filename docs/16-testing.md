@@ -15,7 +15,7 @@ node test/run.mjs     # 直接运行（需已有 dist）
 - 结果同时输出到控制台与 `/workspace/test-report.json`。
 - 全部通过时进程退出码 0，有失败则非 0。
 
-当前基线：**83 项测试全通过**（14 个套件）。
+当前基线：**105 项测试全通过**（18 个套件，prod + dev 双模式；报告见 `/workspace/test-report.json`）。
 
 ## 文件
 
@@ -34,6 +34,8 @@ node test/run.mjs     # 直接运行（需已有 dist）
 | 标准 Web 格式 | JSON / URLSearchParams / multipart FormData / 415 / Streams 分片 |
 | 安全策略 | CSP/CORS/no-store 头、OPTIONS、路径拦截、FS 门禁、策略不可写、路径穿越 |
 | `@NavExt-ws` 全双工总线 | 握手、ping→pong、stream 中继回声、subpage 权威解析、非法消息容错 |
+| 可观测性 API | health 状态/uptime、stats 请求计数、routes 自描述、bus/clients 连接快照 |
+| HTTP 触发总线广播 | 默认 403 门控、env/策略开启、坏 JSON/缺 type/保留事件校验、WS 客户端实际收到 |
 | 浏览器运行时 | 各页面 0 console error、Markdown 标题色 DOM 验证 |
 | Vite 开发服务器（dev） | 3001 关键页面、代理 `viaVite` 标记与白名单下发 |
 

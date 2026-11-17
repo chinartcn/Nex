@@ -17,6 +17,61 @@
 | `/favicon.ico` | GET | 204 |
 | `/_navext/exserver/<name>/*` | GET | Exserver 静态资源（如 styles.css） |
 
+## 可观测性
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/health` | GET | 健康检查：`{status,uptimeMs,mode,version,time}` |
+| `/api/stats` | GET | 运行指标：请求数/状态分布/日志量/总线连接数/扩展与页面数/最近请求 |
+| `/api/routes` | GET | 路由自描述清单（API 自我发现，含 `gated` 标记） |
+| `/api/bus/clients` | GET | 当前 WebSocket 总线连接快照（id/地址/连接时长） |
+
+**`/api/health` 示例**：
+
+```json
+{ "status": "ok", "uptimeMs": 12345, "mode": "prod", "version": "2.0", "time": 1700000000000 }
+```
+
+**`/api/stats` 示例**（节选）：
+
+```json
+{
+  "uptimeMs": 12345, "requests": 320, "apiRequests": 180,
+  "byStatus": { "200": 310, "404": 10 }, "notFound": 10,
+  "busClients": 2, "logs": 14, "extensions": 3, "pages": 2,
+  "recent": [ { "t": 1700000000000, "method": "GET", "path": "/api/stats", "status": 200, "ms": 1 } ]
+}
+```
+
+> 指标为**进程内存态**，重启清零；`recent` 只保留最近 20 条，用于排障。
+
+## 总线广播（HTTP 触发）
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/bus/broadcast` | POST | 经 HTTP 向所有总线客户端广播事件；**受 `security.apiBroadcast` 门控，默认关闭** |
+
+请求体（JSON）：
+
+```json
+{ "type": "my-event", "scope": "team", "payload": { "msg": "hello" } }
+```
+
+- `type`（必填，字符串）：事件类型。保留的内部事件（如 `__nex:reload`、`log:event` 等）会被拒绝（403），防止伪造刷新/日志信号。
+- `scope`（可选，默认 `global`）：作用域，透传给客户端。
+- `payload`（可选）：任意 JSON，透传。
+
+成功响应：`{ "ok": true, "delivered": <客户端数>, "envelope": {...} }`。客户端收到的信封额外带 `_from: "http"` 标记。
+
+错误：400（坏 JSON / 缺 type）、403（未开启门控 / 保留事件）。
+
+启用方式（三选一）：
+- `nav-ext.config.js` 设 `security.apiBroadcast: true`；
+- 环境变量 `NEX_API_BROADCAST=1`；
+- 运行时经 `POST /api/security/policy`（需 `apiWritable: true`）发送 `apiBroadcast=true`。
+
+详见 [总线广播与安全](10-security.md)。
+
 ## 扩展与页面
 
 | 端点 | 方法 | 说明 |

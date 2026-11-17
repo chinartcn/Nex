@@ -28,7 +28,19 @@ export async function loadConfig() {
     : null;
   const mode = argvMode || envMode || config.mode || 'prod';
 
-  return { ...config, mode };
+  // 安全开关的环境变量覆盖：便于容器化部署与测试进程临时开启，
+  // 不改动持久化的 nav-ext.config.js。仅 '1'/'true' 视为开启。
+  const security = { ...(config.security || {}) };
+  if (process.env.NEX_API_WRITABLE === '1' || process.env.NEX_API_WRITABLE === 'true')
+    security.apiWritable = true;
+  if (process.env.NEX_API_BROADCAST === '1' || process.env.NEX_API_BROADCAST === 'true')
+    security.apiBroadcast = true;
+
+  // 端口覆盖：便于并行启动多个实例（测试用）
+  const server = { ...(config.server || {}) };
+  if (process.env.NEX_PORT) server.port = Number(process.env.NEX_PORT);
+
+  return { ...config, security, server, mode };
 }
 
 function pathToFileURLSafe(p) {

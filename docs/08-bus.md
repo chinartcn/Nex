@@ -91,3 +91,27 @@ Nex.ready((bus) => {
   bus.send('client-ping', { hello: 'world' });
 });
 ```
+
+## HTTP 触发广播（外部系统集成）
+
+非浏览器系统（运维脚本、CI、其它后端）可经 `POST /api/bus/broadcast` 向所有前端广播事件，无需自己建立 WebSocket 连接：
+
+```bash
+curl -X POST http://localhost:3000/api/bus/broadcast \
+  -H 'content-type: application/json' \
+  -d '{"type":"deploy-notice","scope":"global","payload":{"msg":"v2.1 已发布"}}'
+```
+
+- **默认关闭**（最小授权）：需 `security.apiBroadcast: true` 或 `NEX_API_BROADCAST=1`，或用策略 API 开启（需 `apiWritable`）。
+- 保留的内部事件（`__nex:reload`、`log:event`、`subpage:open:ok` 等）禁止外部伪造，返回 403。
+- 客户端收到的信封带 `_from: "http"` 标记，便于区分来源。
+- 连接可见性：`GET /api/bus/clients` 查看当前连接数与元信息。
+
+前端订阅这类事件与订阅普通事件一致：
+
+```js
+Nex.bus.on('deploy-notice', (payload, env) => console.log(payload.msg, env._from));
+```
+
+详见 [HTTP API 参考](15-http-api.md) 与 [安全策略](10-security.md)。
+

@@ -35,15 +35,55 @@ const DEV_EXT = new Set([
   '.html', '.js', '.mjs', '.css', '.json', '.svg', '.map', '.ico', '.png',
 ]);
 
+// 路由自描述清单：/api/routes 与文档共用同一事实来源，避免漂移。
+const API_ROUTES = [
+  { method: 'GET', path: '/api/health', desc: '健康检查：状态/模式/运行时长/版本' },
+  { method: 'GET', path: '/api/stats', desc: '运行指标：请求数/日志量/连接数/扩展数等' },
+  { method: 'GET', path: '/api/routes', desc: '本路由清单（API 自描述）' },
+  { method: 'GET', path: '/api/bus/clients', desc: '当前 WebSocket 总线连接快照' },
+  { method: 'POST', path: '/api/bus/broadcast', desc: '经 HTTP 向总线广播事件（受 apiBroadcast 门控）', gated: true },
+  { method: 'GET', path: '/api/extensions', desc: '全部已发现扩展（含禁用者）' },
+  { method: 'POST', path: '/api/extensions/toggle', desc: '启停扩展（仅内存态）' },
+  { method: 'GET', path: '/api/exjs', desc: '客户端扩展清单与构建 manifest' },
+  { method: 'GET', path: '/api/manifest', desc: '生产构建 manifest' },
+  { method: 'GET', path: '/api/pages', desc: '子页清单' },
+  { method: 'GET', path: '/api/home', desc: '当前解析到的主页' },
+  { method: 'GET', path: '/api/logs', desc: '统一日志缓冲' },
+  { method: 'POST', path: '/api/logs/clear', desc: '清空日志缓冲' },
+  { method: 'GET', path: '/api/security', desc: '当前安全策略' },
+  { method: 'POST', path: '/api/security/policy', desc: '运行时策略补丁（受 apiWritable 门控）', gated: true },
+  { method: 'POST', path: '/api/fs/write', desc: 'FS 写门禁演示（受 fsWrite 门控）', gated: true },
+  { method: 'POST', path: '/api/form', desc: '标准 Web 格式解析回显' },
+  { method: 'GET', path: '/api/stream', desc: 'Standard Web Streams 分片出站' },
+];
+
 export function createServer(registry, config, deps) {
   const { bus, exjs, security, subpages, log, requestHooks = [], pageExjs = new Map() } = deps;
   const devMode = config.mode === 'dev';
   // prod 下页面来自构建产物 dist/page/，dev 下来自源 page/
   const pageRoot = devMode ? path.join(ROOT, 'page') : path.join(ROOT, 'dist', 'page');
 
+  // ── 可观测性指标（内存态，进程重启清零）──
+  const startedAt = Date.now();
+  const metrics = { requests: 0, byStatus: {}, apiRequests: 0, notFound: 0 };
+  const RECENT_N = 20;
+  const recent = []; // 最近请求环形缓冲（供排障）
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
     const p = url.pathname;
+
+    // 请求计数 + 最近请求记录（在响应结束时结算状态码）
+    metrics.requests++;
+    const reqStart = Date.now();
+    if (p.startsWith('/api/')) metrics.apiRequests++;
+    res.on('finish', () => {
+      const code = res.statusCode;
+      metrics.byStatus[code] = (metrics.byStatus[code] || 0) + 1;
+      if (code === 404) metrics.notFound++;
+      recent.unshift({ t: reqStart, method: req.method, path: p, status: code, ms: Date.now() - reqStart });
+      if (recent.length > RECENT_N) recent.pop();
+    });
 
     security.applyHeaders(res); // CSP / CORS 统一注入
 
@@ -86,6 +126,89 @@ export function createServer(registry, config, deps) {
           else console.error(`[request-hook:${h.id}]`, err);
         }
       }
+    }
+
+    // ---- 可观测性 API ----
+    // 健康检查：进程存活 / 模式 / 运行时长
+    if (req.method === 'GET' && p === '/api/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'ok',
+        uptimeMs: Date.now() - startedAt,
+        mode: config.mode,
+        version: '2.0',
+        time: Date.now(),
+      }));
+      return;
+    }
+    // 运行指标：请求数 / 状态分布 / 日志量 / 连接数 / 扩展与页面数
+    if (req.method === 'GET' && p === '/api/stats') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        uptimeMs: Date.now() - startedAt,
+        requests: metrics.requests,
+        apiRequests: metrics.apiRequests,
+        byStatus: { ...metrics.byStatus },
+        notFound: metrics.notFound,
+        busClients: bus ? bus.clients.size : 0,
+        logs: log ? log.list().length : 0,
+        extensions: registry.list().length,
+        pages: subpages ? subpages.list().length : 0,
+        recent,
+      }));
+      return;
+    }
+    // 路由自描述：与 API_ROUTES 单一事实来源
+    if (req.method === 'GET' && p === '/api/routes') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ routes: API_ROUTES }));
+      return;
+    }
+    // 总线连接快照
+    if (req.method === 'GET' && p === '/api/bus/clients') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        count: bus ? bus.clients.size : 0,
+        clients: bus && typeof bus.clientInfo === 'function' ? bus.clientInfo() : [],
+      }));
+      return;
+    }
+    // HTTP 触发总线广播：受 security.apiBroadcast 门控（默认最小授权）
+    if (req.method === 'POST' && p === '/api/bus/broadcast') {
+      if (!security.canBroadcast()) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'bus broadcast denied by policy (enable security.apiBroadcast)' }));
+        return;
+      }
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'invalid JSON body' }));
+        return;
+      }
+      const type = typeof body.type === 'string' ? body.type.trim() : '';
+      if (!type) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'missing "type"' }));
+        return;
+      }
+      // 禁止外部调用覆盖内部保留事件，防止伪造刷新/日志/路由信号
+      const RESERVED = new Set([
+        '__nex:reload', 'log:event', 'log:cleared', 'security-policy-changed',
+        'subpage:open:ok', 'server-ready', 'server-pong', 'server-stream:echo',
+      ]);
+      if (RESERVED.has(type)) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'reserved event type: ' + type }));
+        return;
+      }
+      const scope = typeof body.scope === 'string' && body.scope ? body.scope : 'global';
+      const envelope = { type, scope, payload: body.payload ?? null, _from: 'http' };
+      bus.broadcast(envelope);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, delivered: bus.clients.size, envelope }));
+      return;
     }
 
     // ---- API ----
@@ -181,6 +304,7 @@ export function createServer(registry, config, deps) {
       const params = new URLSearchParams(await readBody(req));
       const patch = Object.fromEntries(params.entries());
       if ('fsWrite' in patch) patch.fsWrite = patch.fsWrite === 'true';
+      if ('apiBroadcast' in patch) patch.apiBroadcast = patch.apiBroadcast === 'true';
       if ('allowFsWrite' in patch)
         patch.allowFsWrite = patch.allowFsWrite.split(',').filter(Boolean);
       const result = security.patch(patch, {

@@ -13,6 +13,8 @@ const DEFAULT = {
   fsWrite: false,
   allowFsWrite: [],
   blockedPaths: [],
+  // HTTP 触发总线广播：默认关闭（最小授权）。外部集成需显式开启。
+  apiBroadcast: false,
 };
 
 function merge(base, ...objs) {
@@ -83,6 +85,11 @@ export class SecurityPolicy {
   canWriteFs(extId) {
     if (this.policy.fsWrite) return true;
     return (this.policy.allowFsWrite || []).includes(extId);
+  }
+
+  // HTTP 触发总线广播门禁（默认最小授权）
+  canBroadcast() {
+    return this.policy.apiBroadcast === true;
   }
 
   // 运行时补丁：受 config.security.apiWritable 控制（默认关）

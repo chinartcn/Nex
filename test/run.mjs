@@ -317,6 +317,151 @@ async function wsSuite(base) {
   return s;
 }
 
+/* ─────────────── 可观测性 API ─────────────── */
+async function observabilitySuite(base) {
+  const s = new Suite(`可观测性 API（health/stats/routes/clients）[${base}]`);
+  const get = (p) => http(base + p);
+
+  await s.test('GET /api/health — 状态/模式/运行时长', async (t) => {
+    const r = await get('/api/health');
+    const j = r.json();
+    t.equal(r.status, 200, 'status 200');
+    t.equal(j.status, 'ok', 'status=ok');
+    t.check(typeof j.uptimeMs === 'number' && j.uptimeMs >= 0, 'uptimeMs 为有效数字');
+    t.check(j.mode === 'prod' || j.mode === 'dev', `mode 有效 (${j.mode})`);
+    t.equal(j.version, '2.0', 'version=2.0');
+  });
+  await s.test('GET /api/stats — 请求数/连接数/日志量/扩展数', async (t) => {
+    const r = await get('/api/stats');
+    const j = r.json();
+    t.equal(r.status, 200, 'status 200');
+    t.check(j.requests > 0, `requests > 0 (${j.requests})`);
+    t.check(typeof j.byStatus === 'object' && j.byStatus['200'] > 0, 'byStatus 含 200 计数');
+    t.check(typeof j.busClients === 'number', 'busClients 为数字');
+    t.check(typeof j.logs === 'number' && j.logs > 0, `logs > 0 (${j.logs})`);
+    t.check(j.extensions > 0, `extensions > 0 (${j.extensions})`);
+    t.check(j.pages > 0, `pages > 0 (${j.pages})`);
+    t.check(Array.isArray(j.recent), 'recent 为数组');
+  });
+  await s.test('GET /api/routes — 路由自描述含新增端点', async (t) => {
+    const r = await get('/api/routes');
+    const j = r.json();
+    t.equal(r.status, 200, 'status 200');
+    t.check(Array.isArray(j.routes), 'routes 为数组');
+    const paths = j.routes.map((x) => x.path);
+    for (const p of ['/api/health', '/api/stats', '/api/routes', '/api/bus/clients', '/api/bus/broadcast']) {
+      t.check(paths.includes(p), `清单含 ${p}`);
+    }
+    const bc = j.routes.find((x) => x.path === '/api/bus/broadcast');
+    t.check(bc && bc.gated === true, 'broadcast 标记 gated');
+  });
+  await s.test('GET /api/bus/clients — 连接快照结构正确', async (t) => {
+    const r = await get('/api/bus/clients');
+    const j = r.json();
+    t.equal(r.status, 200, 'status 200');
+    t.check(typeof j.count === 'number', 'count 为数字');
+    t.check(Array.isArray(j.clients), 'clients 为数组');
+  });
+  return s;
+}
+
+/* ─────────────── HTTP 触发总线广播 ─────────────── */
+async function broadcastSuite(mode) {
+  const s = new Suite(`HTTP 触发总线广播（门控 + 送达）[${mode}]`);
+  const base = 'http://localhost:3000';
+
+  // 主服务（默认 apiBroadcast=false）验证拒绝路径
+  await s.test('默认策略下广播被拒绝（403）', async (t) => {
+    const r = await http(base + '/api/bus/broadcast', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'x-demo', payload: { a: 1 } }),
+    });
+    t.equal(r.status, 403, 'status 403');
+    t.check(/apiBroadcast/.test(r.text), '提示开启 apiBroadcast');
+  });
+  // 另起一个开启 apiWritable 的实例（独立端口 3100），临时开启广播后验证成功路径
+  // （缺 type / 保留事件 / 坏 JSON 的校验只能在此实例上测——主服务被门控挡在前面）
+  const base2 = 'http://localhost:3100';
+  const srv2 = startServer({
+    mode, cwd: ROOT,
+    env: { NEX_API_WRITABLE: '1', NEX_API_BROADCAST: '1', NEX_PORT: '3100' },
+  });
+  try {
+    await srv2.waitReady(base2 + '/api/health');
+    // 用 NEX_API_BROADCAST=1 直接开启；再验证策略 API 也能开关（apiWritable=1）
+    await s.test('env 开启 apiBroadcast 后策略生效', async (t) => {
+      const sec = (await http(base2 + '/api/security')).json();
+      t.equal(sec.apiBroadcast, true, '策略中 apiBroadcast=true');
+    });
+    await s.test('策略 API 可关闭再开启 apiBroadcast', async (t) => {
+      const off = await http(base2 + '/api/security/policy', {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'apiBroadcast=false',
+      });
+      t.equal(off.status, 200, '关闭 PATCH 200');
+      const denied = await http(base2 + '/api/bus/broadcast', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'x-demo' }),
+      });
+      t.equal(denied.status, 403, '关闭后广播 403');
+      const on = await http(base2 + '/api/security/policy', {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'apiBroadcast=true',
+      });
+      t.equal(on.status, 200, '重开 PATCH 200');
+    });
+
+    await s.test('坏 JSON 返回 400', async (t) => {
+      const r = await http(base2 + '/api/bus/broadcast', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{bad',
+      });
+      t.equal(r.status, 400, 'status 400');
+    });
+    await s.test('缺 type 返回 400', async (t) => {
+      const r = await http(base2 + '/api/bus/broadcast', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ payload: {} }),
+      });
+      t.equal(r.status, 400, 'status 400');
+    });
+    await s.test('保留事件类型被拒绝（403）', async (t) => {
+      const r = await http(base2 + '/api/bus/broadcast', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: '__nex:reload' }),
+      });
+      t.equal(r.status, 403, 'status 403');
+      t.check(/reserved/.test(r.text), '提示 reserved');
+    });
+    await s.test('广播成功且 WS 客户端实际收到', async (t) => {
+      const ws = await wsConnect(base2.replace(/^http/, 'ws') + '/@NavExt-ws');
+      try {
+        const got = ws.waitFor((m) => m && m.type === 'x-http-event', 4000);
+        const r = await http(base2 + '/api/bus/broadcast', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'x-http-event', scope: 'team', payload: { from: 'test', n: 7 } }),
+        });
+        const j = r.json();
+        t.equal(r.status, 200, 'status 200');
+        t.equal(j.ok, true, 'ok=true');
+        t.check(j.delivered >= 1, `delivered >= 1 (${j.delivered})`);
+        const m = await got;
+        t.check(!!m, 'WS 客户端收到广播');
+        if (m) {
+          t.equal(m.scope, 'team', 'scope 透传');
+          t.equal(m.payload.n, 7, 'payload 透传');
+          t.equal(m._from, 'http', '带 _from=http 标记');
+        }
+      } finally {
+        ws.close();
+      }
+    });
+  } catch (e) {
+    await s.test('开启实例启动', (t) => t.check(false, e.message + '\n' + srv2.log));
+  } finally {
+    srv2.stop();
+  }
+  return s;
+}
+
 /* ─────────────── 浏览器运行时 ─────────────── */
 async function browserSuite(base, mode) {
   const s = new Suite(`浏览器运行时（console 错误 / 渲染）[${base}]`);
@@ -377,7 +522,10 @@ async function runMode(mode) {
     suites.push(await webFormatSuite(base));
     suites.push(await securitySuite(base));
     suites.push(await wsSuite(base));
+    suites.push(await observabilitySuite(base));
     suites.push(await browserSuite(base, mode));
+    // 广播套件自带独立实例（开启 apiWritable），放在主服务仍在运行时之后
+    suites.push(await broadcastSuite(mode));
 
     if (mode === 'dev') {
       const vite = new Suite(`Vite 开发服务器 [http://localhost:3001]`);

@@ -253,9 +253,14 @@ export function dumpDom(url) {
 }
 
 /* ─────────────── 进程管理 ─────────────── */
-export function startServer({ mode, cwd }) {
+export function startServer({ mode, cwd, env = {} }) {
   const args = mode === 'dev' ? ['src/index.js', '--dev'] : ['src/index.js'];
-  const child = spawn('node', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  const child = spawn('node', args, {
+    cwd,
+    env: { ...process.env, ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  });
   let log = '';
   child.stdout.on('data', (c) => (log += c));
   child.stderr.on('data', (c) => (log += c));

@@ -14,7 +14,9 @@
 - **双模式**：`npm start` 跑 `dist/` 生产静态服务；`npm run dev` 跑 Vite HMR。
 - **配置即代码**：`.js` 配置 + 热更新；彻底摒弃 1.x 的 `.json` 清单、`html.json`、`window.NavExt` 等旧机制。
 - **分组构建**：依赖分析 → 白名单 → 共享 bundle，减少浏览器请求数。
-- **全量测试**：零依赖测试套件，prod/dev 双模式 83 项全通过。
+- **可观测性 API**：`/api/health` `/api/stats` `/api/routes` `/api/bus/clients`，运行指标与路由自描述开箱即用。
+- **HTTP 触发总线**：`POST /api/bus/broadcast` 让外部系统经 HTTP 向前端广播（受 `apiBroadcast` 门控，默认关闭）。
+- **全量测试**：零依赖测试套件，prod/dev 双模式全通过。
 
 ## 快速开始
 
@@ -109,7 +111,8 @@ Phase 0–6 全部完成：
 - ✅ Phase 5：安全策略外置 + 子页/多主页路由 + 客户端路由器
 - ✅ Phase 6：规范化 `window.Nex` + 标准 Web 格式 + 1.x 废弃清理
 - ✅ 构建两阶段：依赖分析 + 分组 bundle + 白名单收敛加载
-- ✅ 全量测试：prod/dev 双模式 83 项全通过
+- ✅ API 升级：可观测性（health/stats/routes/clients）+ HTTP 触发总线广播（门控）
+- ✅ 全量测试：prod/dev 双模式 105 项全通过
 
 ## 仓库
 
