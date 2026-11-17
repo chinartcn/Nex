@@ -1,74 +1,116 @@
 # Nex
 
-NavExt 2.0 实现（Phase 0 骨架）。架构见同级 `NavExt-2.0-arch.md`。
+> **NavExt 2.0** —— 现代化、零运行时依赖的导航 / 扩展平台。基本方针：**更现代、去除繁琐**。
+>
+> 这是 NavExt 1.x 的**彻底重写**，不是增量升级。完整文档见 [docs/](docs/README.md)。
 
-## 运行
+## 特性
+
+- **零运行时依赖**：Node.js 内置 HTTP + 手写 RFC6455 WebSocket。
+- **两套扩展体系**：`Exserver`（服务端）/ `Exjs`（客户端，TS + 可选 React），目录自动发现，无需清单。
+- **统一全双工总线**：`@NavExt-ws` 取代私有 RPC，前后端解耦，服务端可主动广播。
+- **标准 Web 格式**：`URLSearchParams` / `FormData` / `ReadableStream`，不引入私有协议。
+- **安全默认最小授权**：FS 写默认关；CSP/CORS 由外置策略定义；路径穿越兜底不可关闭。
+- **双模式**：`npm start` 跑 `dist/` 生产静态服务；`npm run dev` 跑 Vite HMR。
+- **配置即代码**：`.js` 配置 + 热更新；彻底摒弃 1.x 的 `.json` 清单、`html.json`、`window.NavExt` 等旧机制。
+- **分组构建**：依赖分析 → 白名单 → 共享 bundle，减少浏览器请求数。
+- **全量测试**：零依赖测试套件，prod/dev 双模式 83 项全通过。
+
+## 快速开始
 
 ```bash
 cd Nex
-node src/index.js
-# 打开 http://localhost:3000
+npm install
+
+npm start      # 生产：自动构建 + 静态服务 http://localhost:3000
+# 或
+npm run dev    # 开发：主服务 :3000 + Vite HMR :3001（开发请打开 :3001）
 ```
 
-验证自动发现（无需 .js.list.json）：
+验证：
 
 ```bash
-curl http://localhost:3000/api/extensions
-# 返回全部已发现扩展（含被禁用者）
+curl http://localhost:3000/api/extensions   # 自动发现的扩展清单
+curl http://localhost:3000/api/pages        # 子页清单
+curl http://localhost:3000/api/security     # 当前安全策略
 ```
 
-## 目录
+浏览器打开：
 
-| 路径 | 作用 |
-| --- | --- |
-| `src/` | 引擎（config / discover / registry / server / security / bus 桩） |
-| `Exserver/` | 服务端扩展 + `security-policy/`（安全策略外置） |
-| `Exjs/` | 客户端扩展（TS/React，接打包器） |
-| `page/` | 统一页面目录（含 `sub.js`，摒弃默认 index.html） |
-| `ui/` | 普通示例文件夹（作者随手取名，`ui1/` 为其中一个示例，**非内置/特殊概念**） |
-| `NavExt-*` | TS / React / esbuild / vite / sub 能力目录（扁平顶层） |
-| `nav-ext.config.js` | 全局统一配置（`.js`，含 `mode: 'dev'`） |
-
-## 进度
-
-- ✅ Phase 0：引擎骨架 + 自动发现 + 内存注册表 + 最小 `/api/extensions`
-- ✅ Phase 1：`@NavExt-ws` 全双工总线（零依赖手写 WS）+ 标准 Web 格式信封 + **日志汇聚**（`src/log.js` 把 server/client 日志汇入统一环形缓冲并广播 `log:event`；`GET /api/logs`、`POST /api/logs/clear`；`Nex.log.on` 订阅统一流）
-- ✅ Phase 2：Exserver / Exjs 运行时 + `.js` 配置加载（ctx.bus/fetch/timer/interval/hook，requires 拓扑排序）
-- ✅ Phase 3：NavExt-TS / React SDK + 打包管线（esbuild → `dist/exjs/*.js`）
-- ✅ Phase 4：NavExt-vite 热更（`mode:dev` 启动独立 Vite dev server 于 3001，HMR + 代理回主服务）
-- ✅ Phase 5：安全策略外置（`Exserver/security-policy`）+ 安全 API + FS 写门禁 + 路径拦截；`page/` 子页自动发现 + `/api/pages`；**多主页路由**（`src/home.js` 按 path/host/env 选主页）+ NavExt-sub 客户端路由器 `Nex.router`（`go(id)` 经总线 `subpage:open` 由服务端权威解析回 `subpage:open:ok`，1s 离线兜底）+ `GET /api/home`
-- ✅ Phase 6：规范化客户端 API `window.Nex`（bus/params/form/stream/dom/router/log）+ 标准 Web 格式端点（`/api/form` FormData、`/api/stream` ReadableStream、总线 `stream:data` 中继）+ 1.x 废弃清理（旧 `window.NavExt` → `window.Nex`）
+- 生产：<http://localhost:3000>
+- 开发：<http://localhost:3001>（带 HMR）
 
 ## 命令
 
-```bash
-cd Nex
-npm install        # 安装 esbuild / react（构建期依赖）
-npm run build      # NavExt-esbuild：打包 Exjs → dist/exjs/*.js
-node src/index.js  # 启动（开发态可直接跑，未构建则回退源）
-```
+| 命令 | 作用 |
+| --- | --- |
+| `npm start` | `prestart` 自动构建 + 生产静态服务（:3000） |
+| `npm run dev` | 主服务 + Vite HMR（:3000 + :3001） |
+| `npm run build` | 依赖分析 + 分组 bundle + 重写 HTML |
+| `npm run analyze` | 只输出依赖分析报告，不构建 |
+| `npm test` | 构建 + prod/dev 双模式全量测试 |
+| `npm run test:prod` / `test:dev` | 单模式测试 |
 
-## 快速验证
+> 运行模式由**启动命令**决定（`--dev` flag / `NEX_MODE` / 配置 `mode` / prod 兜底），不是靠改配置文件切换。
 
-```bash
-cd Nex
-node src/index.js
-# 生产态（nav-ext.config.js mode:'prod'）：http://localhost:3000
-# 开发态（mode:'dev'）：https:// 打开 http://localhost:3001 （Vite HMR，代理回 3000）
+## 文档
 
-curl http://localhost:3000/api/extensions
-curl http://localhost:3000/api/exjs        # dev 返回 /Exjs 源；prod 返回 dist 产物
-curl http://localhost:3000/api/pages       # Phase 5 子页清单
-curl http://localhost:3000/api/security    # 当前安全策略
-curl -X POST --data "ext=x" http://localhost:3000/api/fs/write   # 403（默认最小授权）
-curl -o /dev/null -w "%{http_code}\n" http://localhost:3000/admin # 403（blockedPaths）
-# Phase 6：标准 Web 格式端点
-curl -F name=nex -F mode=dev http://localhost:3000/api/form   # FormData 解析 → {"ok":true,"fields":[...]}
-curl "http://localhost:3000/api/stream?n=3&delay=50"          # Standard Web Streams 分片出站
-# 多主页路由：NEX_HOME_A2=1 node src/index.js → 访问 / 命中 a2；/preview/ 也命中 a2
-# 浏览器打开开发地址 http://localhost:3001 → 控制台可见 server-ready / pong，页面出现 React 面板
-#   规范化客户端 API：window.Nex（bus/params/form/stream/dom/router/log）
-#   修改 Exjs/example-ext/*.ts(x) 即触发热更新
-# WS 经 Vite 代理：连 ws://localhost:3001/@NavExt-ws 发 {type:"client-ping"} 收 server-pong
-#   总线流：发 {type:"stream:data",payload:{name,seq,chunk,done}} 经内置中继扇出，Exserver 回显 server-stream:echo
-```
+完整文档已拆分到 [`docs/`](docs/README.md)，按主题检索：
+
+### 入门
+- [概览与设计原则](docs/01-overview.md)
+- [快速开始](docs/02-quickstart.md)
+- [配置体系](docs/03-configuration.md)
+- [目录结构](docs/04-directory-layout.md)
+
+### 核心机制
+- [架构与运行机制](docs/05-architecture.md)
+- [Exserver 服务端扩展](docs/06-exserver.md)
+- [Exjs 客户端扩展](docs/07-exjs.md)
+- [`@NavExt-ws` 全双工总线](docs/08-bus.md)
+- [客户端 API `window.Nex`](docs/09-client-api.md)
+- [安全策略](docs/10-security.md)
+- [子页与多主页路由](docs/11-subpages.md)
+- [标准 Web 格式](docs/12-web-formats.md)
+
+### 工程
+- [构建与依赖分析](docs/13-build.md)
+- [开发热更新](docs/14-dev-hmr.md)
+- [HTTP API 参考](docs/15-http-api.md)
+- [测试](docs/16-testing.md)
+- [1.x → 2.0 迁移与废弃清单](docs/17-migration.md)
+- [常见问题](docs/18-faq.md)
+
+## 目录一览
+
+| 路径 | 作用 |
+| --- | --- |
+| `src/` | 引擎核心（config / discover / registry / server / bus / exserver / exjs / security / dev） |
+| `Exserver/` | 服务端扩展 + `security-policy/`（安全策略外置） |
+| `Exjs/` | 客户端扩展（TS/React，经打包器） |
+| `page/` | 统一页面目录（子页 + 内容页，无默认 index.html 主页） |
+| `NavExt-esbuild/` | 生产打包：依赖分析 + 分组 bundle |
+| `NavExt-vite/` · `NavExt-TS/` · `NavExt-React/` · `NavExt-sub/` | 能力目录（**目录名**，示例性命名，可任意改名） |
+| `ui/` | 普通示例文件夹（`ui1/` 是其中一个示例，**非内置/特殊概念**） |
+| `test/` | 全量测试套件 |
+| `docs/` | 本文档中心 |
+| `nav-ext.config.js` | 全局统一配置（`.js`） |
+| `dist/` | 构建产物（gitignore；prod 消费，含 `Exjs/` 大写目录） |
+
+## 状态
+
+Phase 0–6 全部完成：
+
+- ✅ Phase 0：引擎骨架 + 自动发现 + 内存注册表
+- ✅ Phase 1：`@NavExt-ws` 全双工总线 + 日志汇聚
+- ✅ Phase 2：Exserver / Exjs 运行时 + `.js` 配置加载
+- ✅ Phase 3：TS / React SDK + esbuild 打包管线
+- ✅ Phase 4：Vite 热更（:3001）
+- ✅ Phase 5：安全策略外置 + 子页/多主页路由 + 客户端路由器
+- ✅ Phase 6：规范化 `window.Nex` + 标准 Web 格式 + 1.x 废弃清理
+- ✅ 构建两阶段：依赖分析 + 分组 bundle + 白名单收敛加载
+- ✅ 全量测试：prod/dev 双模式 83 项全通过
+
+## 仓库
+
+<https://github.com/chinartcn/Nex>
