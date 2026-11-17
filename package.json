@@ -9,7 +9,11 @@
     "start": "node src/index.js",
     "dev": "node src/index.js --dev",
     "build": "node NavExt-esbuild/build.mjs",
-    "analyze": "node NavExt-esbuild/analyze.mjs"
+    "analyze": "node NavExt-esbuild/analyze.mjs",
+    "pretest": "node NavExt-esbuild/build.mjs",
+    "test": "node test/run.mjs",
+    "test:prod": "node test/run.mjs --mode=prod",
+    "test:dev": "node test/run.mjs --mode=dev"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
