@@ -275,8 +275,19 @@ export function startServer({ mode, cwd, env = {} }) {
       }
       throw new Error('服务启动超时。日志:\n' + log);
     },
-    stop() {
+    async stop() {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      let timer;
+      const exited = new Promise((resolve) => {
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+        timer = setTimeout(resolve, 1500); // 等待上限，避免进程忽略 SIGTERM 时卡死
+      });
       try { process.kill(-child.pid, 'SIGTERM'); } catch { try { child.kill('SIGTERM'); } catch {} }
+      await exited;
+      // 兜底：进程组仍未退出则强杀，防止残留占端口污染后续套件
+      if (child.exitCode === null && child.signalCode === null) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+      }
     },
   };
 }

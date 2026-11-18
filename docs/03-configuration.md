@@ -88,6 +88,21 @@ export default {
 - 通过 `ctx.config` 读取，getter 实时反映最新值。
 - 修改文件**无需重启**：监听目录 + 150ms 防抖 + data URL 求值 + 内容去重，成功后经总线广播 `__nex:reload` 让前端自动刷新（见 [Exserver](06-exserver.md)）。
 
+## 运行时配置自省与变更
+
+除改文件外，还可通过 HTTP API 查看与临时变更配置（详见 [HTTP API](15-http-api.md)）：
+
+```bash
+curl http://localhost:3000/api/config                       # 脱敏后的生效配置
+curl -X PATCH -H 'content-type: application/json' \
+  -d '{"site.accent":"#123456"}' http://localhost:3000/api/config   # 需 apiWritable=true
+```
+
+- **`GET /api/config` 只读开放**：返回 `config`（当前生效配置）、`runtime`（模式 / 端口 / 安全摘要）、`note`。敏感键（`token` / `secret` / `password` / `apiKey` 等）的**值**替换为 `***`，函数字段被过滤。
+- **`PATCH /api/config` 受 `apiWritable` 门控**（默认 403）：只接受 `site.title`、`site.description`、`site.accent`、`home.file` 四个白名单字段；含其它字段则整批 400，不会部分生效。
+- 变更**只改内存、不写文件**（响应带 `persistent: false`），重启失效；`home.file` 下一次 `/` 请求即生效（主页路由实时读取配置）。
+- 成功后广播 `config-changed` 事件。
+
 ## 配置热更新与自动刷新
 
 - 扩展配置改动 → `server.conf.js` 热更新 → 广播 `__nex:reload`。

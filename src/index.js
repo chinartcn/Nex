@@ -49,6 +49,7 @@ async function main() {
 
   const server = createServer(registry, config, {
     bus, exjs, security, subpages, log: hub, requestHooks, pageExjs,
+    exservers: loadedEx, // 扩展管理 API 详情/配置读写的运行时数据来源
   });
   bus.attach(server); // @NavExt-ws 全双工总线
 

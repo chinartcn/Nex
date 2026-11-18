@@ -15,14 +15,14 @@ node test/run.mjs     # 直接运行（需已有 dist）
 - 结果同时输出到控制台与 `/workspace/test-report.json`。
 - 全部通过时进程退出码 0，有失败则非 0。
 
-当前基线：**105 项测试全通过**（18 个套件，prod + dev 双模式；报告见 `/workspace/test-report.json`）。
+当前基线：**133 项测试全通过**（24 个套件，prod + dev 双模式；报告见 `/workspace/test-report.json`）。
 
 ## 文件
 
 | 文件 | 职责 |
 | --- | --- |
 | `test/harness.mjs` | 测试框架：断言/报告器、HTTP 客户端、手写 WS(RFC6455) 客户端、CDP 浏览器采集、进程管理 |
-| `test/run.mjs` | 14 个测试套件的定义与编排 |
+| `test/run.mjs` | 24 个测试套件的定义与编排 |
 
 ## 测试套件
 
@@ -36,6 +36,9 @@ node test/run.mjs     # 直接运行（需已有 dist）
 | `@NavExt-ws` 全双工总线 | 握手、ping→pong、stream 中继回声、subpage 权威解析、非法消息容错 |
 | 可观测性 API | health 状态/uptime、stats 请求计数、routes 自描述、bus/clients 连接快照 |
 | HTTP 触发总线广播 | 默认 403 门控、env/策略开启、坏 JSON/缺 type/保留事件校验、WS 客户端实际收到 |
+| 扩展管理 API | 单扩展详情（能力标志/不泄漏 mod/ctx）、配置读取、不存在 404、默认门控、toggle 幂等置位 |
+| 配置自省 API | GET 结构与脱敏、PATCH 默认 403、`redact()` 敏感键/函数过滤单测 |
+| 配置管理写路径 | 独立实例开启 `apiWritable`：扩展配置写回文件+读回一致、site/home 运行时生效、非法字段整批拒绝、空/数组 body 400 |
 | 浏览器运行时 | 各页面 0 console error、Markdown 标题色 DOM 验证 |
 | Vite 开发服务器（dev） | 3001 关键页面、代理 `viaVite` 标记与白名单下发 |
 

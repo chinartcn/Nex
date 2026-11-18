@@ -42,8 +42,13 @@ const API_ROUTES = [
   { method: 'GET', path: '/api/routes', desc: '本路由清单（API 自描述）' },
   { method: 'GET', path: '/api/bus/clients', desc: '当前 WebSocket 总线连接快照' },
   { method: 'POST', path: '/api/bus/broadcast', desc: '经 HTTP 向总线广播事件（受 apiBroadcast 门控）', gated: true },
+  { method: 'GET', path: '/api/config', desc: '脱敏后的当前生效配置（运维排障）' },
+  { method: 'PATCH', path: '/api/config', desc: '运行时配置补丁（受 apiWritable 门控，白名单字段，重启失效）', gated: true },
   { method: 'GET', path: '/api/extensions', desc: '全部已发现扩展（含禁用者）' },
-  { method: 'POST', path: '/api/extensions/toggle', desc: '启停扩展（仅内存态）' },
+  { method: 'GET', path: '/api/extensions/:id', desc: '单扩展详情：元数据/能力/运行时配置' },
+  { method: 'GET', path: '/api/extensions/:id/config', desc: '读取扩展配置文件内容' },
+  { method: 'PATCH', path: '/api/extensions/:id/config', desc: '更新扩展配置并写回 .js 配置（受 apiWritable 门控）', gated: true },
+  { method: 'POST', path: '/api/extensions/toggle', desc: '启停扩展（内存态，支持 enabled 显式指定）' },
   { method: 'GET', path: '/api/exjs', desc: '客户端扩展清单与构建 manifest' },
   { method: 'GET', path: '/api/manifest', desc: '生产构建 manifest' },
   { method: 'GET', path: '/api/pages', desc: '子页清单' },
@@ -58,7 +63,14 @@ const API_ROUTES = [
 ];
 
 export function createServer(registry, config, deps) {
-  const { bus, exjs, security, subpages, log, requestHooks = [], pageExjs = new Map() } = deps;
+  const {
+    bus, exjs, security, subpages, log,
+    requestHooks = [], pageExjs = new Map(), exservers = [],
+  } = deps;
+  // Exserver 加载后的运行时条目（含 config / mod / ctx），供扩展管理 API 合并；
+  // registry 本身只保留可序列化的元数据，避免 mod/ctx（函数/socket）被 JSON 化。
+  const extRuntime = new Map(exservers.map((e) => [e.id, e]));
+  const apiWritable = () => config.security?.apiWritable === true;
   const devMode = config.mode === 'dev';
   // prod 下页面来自构建产物 dist/page/，dev 下来自源 page/
   const pageRoot = devMode ? path.join(ROOT, 'page') : path.join(ROOT, 'dist', 'page');
@@ -197,6 +209,7 @@ export function createServer(registry, config, deps) {
       const RESERVED = new Set([
         '__nex:reload', 'log:event', 'log:cleared', 'security-policy-changed',
         'subpage:open:ok', 'server-ready', 'server-pong', 'server-stream:echo',
+        'config-changed', 'extension-toggled', 'extension-config-changed',
       ]);
       if (RESERVED.has(type)) {
         res.writeHead(403, { 'content-type': 'application/json' });
@@ -211,18 +224,169 @@ export function createServer(registry, config, deps) {
       return;
     }
 
+    // ---- 配置自省（运维排障）----
+    if (req.method === 'GET' && p === '/api/config') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        config: redact(config),
+        runtime: {
+          mode: config.mode,
+          port: config.server?.port,
+          apiWritable: apiWritable(),
+          security: security ? security.toJSON() : redact(config.security || {}),
+        },
+        note: '运行时快照；PATCH 仅内存态生效，重启失效',
+      }));
+      return;
+    }
+    if (req.method === 'PATCH' && p === '/api/config') {
+      if (!apiWritable()) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'config api not writable (enable security.apiWritable)' }));
+        return;
+      }
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'invalid JSON body' }));
+        return;
+      }
+      // 只放行已知安全的展示类字段，避免运行时改写路由/安全等结构性配置。
+      const ALLOWED = ['site.title', 'site.description', 'site.accent', 'home.file'];
+      const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
+      const bad = keys.filter((k) => !ALLOWED.includes(k));
+      if (!keys.length || bad.length) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: false,
+          reason: bad.length ? 'unsupported config fields: ' + bad.join(', ') : 'empty patch',
+          allowed: ALLOWED,
+        }));
+        return;
+      }
+      const applied = [];
+      for (const k of keys) {
+        const [section, field] = k.split('.');
+        if (!config[section] || typeof config[section] !== 'object') config[section] = {};
+        config[section][field] = body[k];
+        applied.push(k);
+      }
+      // resolveHome 每次请求实时读 config.home，故 home.file 改动下一次请求即生效
+      if (bus) bus.broadcast({ type: 'config-changed', scope: 'global', payload: { applied } });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, applied, persistent: false, config: redact(config) }));
+      return;
+    }
+
+    // ---- 扩展管理（详情 / 配置读写 / 启停增强）----
+    let extm;
+    if (req.method === 'GET' && (extm = p.match(/^\/api\/extensions\/([^/]+)\/config$/))) {
+      const id = safeDecode(extm[1]);
+      const e = registry.get(id);
+      if (!e) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'extension not found: ' + id }));
+        return;
+      }
+      const rt = extRuntime.get(id);
+      const confFile = extConfFile(e);
+      const cfg = rt ? (rt.config || {}) : readConfigFile(confFile);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id, kind: e.kind, file: relPath(confFile), config: cfg || {} }));
+      return;
+    }
+    if (req.method === 'PATCH' && (extm = p.match(/^\/api\/extensions\/([^/]+)\/config$/))) {
+      if (!apiWritable()) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'config api not writable (enable security.apiWritable)' }));
+        return;
+      }
+      const id = safeDecode(extm[1]);
+      const e = registry.get(id);
+      if (!e) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'extension not found: ' + id }));
+        return;
+      }
+      let patch;
+      try { patch = JSON.parse(await readBody(req)); }
+      catch {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'invalid JSON body' }));
+        return;
+      }
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'config patch must be a JSON object' }));
+        return;
+      }
+      const rt = extRuntime.get(id);
+      const confFile = extConfFile(e);
+      const current = rt ? (rt.config || {}) : (readConfigFile(confFile) || {});
+      const merged = { ...current, ...patch };
+      let src;
+      try { src = serializeConfig(merged); }
+      catch (err) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: err.message }));
+        return;
+      }
+      try { fs.writeFileSync(confFile, src, 'utf8'); }
+      catch (err) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'write failed: ' + err.message }));
+        return;
+      }
+      // 同步内存态：Exserver 的 server.conf.js watcher 也会异步刷新，但这里先保证立即可读
+      if (rt) rt.config = merged;
+      e.config = merged;
+      if (bus) {
+        bus.broadcast({ type: 'extension-config-changed', scope: 'global', payload: { id, config: redact(merged) } });
+        bus.broadcast({ type: '__nex:reload', scope: 'global', payload: { reason: 'extension-config', ext: id } });
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, id, file: relPath(confFile), config: redact(merged) }));
+      return;
+    }
+    if (req.method === 'GET' && (extm = p.match(/^\/api\/extensions\/([^/]+)$/))) {
+      const id = safeDecode(extm[1]);
+      const e = registry.get(id);
+      if (!e) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: 'extension not found: ' + id }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(publicExtension(e, extRuntime.get(id))));
+      return;
+    }
+
     // ---- API ----
     if (req.method === 'GET' && p === '/api/extensions') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ extensions: registry.list() }));
+      res.end(JSON.stringify({ extensions: registry.list().map((e) => publicExtension(e, extRuntime.get(e.id))) }));
       return;
     }
     if (req.method === 'POST' && p === '/api/extensions/toggle') {
-      const body = await readBody(req);
-      const params = new URLSearchParams(body); // 标准 Web 格式
-      const ext = registry.toggle(params.get('id'));
+      const params = new URLSearchParams(await readBody(req)); // 标准 Web 格式
+      const id = params.get('id');
+      let ext;
+      if (params.has('enabled')) {
+        // 显式置位（幂等），便于运维脚本精确控制；缺省仍为切换，向后兼容
+        const e = registry.get(id);
+        if (e) { e.enabled = params.get('enabled') === 'true'; ext = e; }
+      } else {
+        ext = registry.toggle(id);
+      }
+      if (ext && bus) {
+        bus.broadcast({ type: 'extension-toggled', scope: 'global', payload: { id: ext.id, enabled: ext.enabled } });
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: !!ext, extension: ext }));
+      res.end(JSON.stringify({
+        ok: !!ext,
+        extension: ext ? publicExtension(ext, extRuntime.get(ext.id)) : null,
+      }));
       return;
     }
     if (req.method === 'GET' && p === '/api/exjs') {
@@ -548,4 +712,85 @@ function readBody(req) {
     req.on('data', (c) => (data += c));
     req.on('end', () => resolve(data));
   });
+}
+
+/* ── 配置自省 / 扩展管理辅助 ── */
+
+// 敏感键名脱敏：/api/config 只读，绝不暴露 token/secret 等凭据
+const SENSITIVE_KEY = /(secret|token|password|passwd|credential|apikey|api_key|authorization|private|access_key)/i;
+export function redact(value, key = '') {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') return undefined;
+  if (value === null) return null;
+  if (SENSITIVE_KEY.test(key)) return '***';
+  if (Array.isArray(value)) return value.map((v) => redact(v, '')).filter((v) => v !== undefined);
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      const r = redact(v, k);
+      if (r !== undefined) out[k] = r;
+    }
+    return out;
+  }
+  return value;
+}
+
+function safeDecode(s) {
+  try { return decodeURIComponent(s); } catch { return s; }
+}
+
+function relPath(fp) {
+  return path.relative(ROOT, fp).split(path.sep).join('/');
+}
+
+// 只取目录名拼配置文件路径，杜绝 id 夹带路径穿越
+function extConfFile(e) {
+  const base = e.kind === 'exserver' ? 'Exserver' : 'Exjs';
+  const file = e.kind === 'exserver' ? 'server.conf.js' : 'conf.js';
+  return path.join(ROOT, base, path.basename(String(e.path || '')), file);
+}
+
+// 读取 .js 配置（纯 `export default {…}`，本地受信任文件）：去注释后求值对象字面量
+function readConfigFile(fp) {
+  try {
+    let src = fs.readFileSync(fp, 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    const m = src.match(/export\s+default\s+([\s\S]*?);?\s*$/);
+    if (!m) return {};
+    return new Function('return (' + m[1].replace(/;\s*$/, '') + ')')();
+  } catch { return {}; }
+}
+
+// 写回 .js 配置：拒绝函数/不可序列化值，避免静默丢失扩展配置里的回调
+function serializeConfig(obj) {
+  const json = JSON.stringify(obj, (_k, v) => {
+    if (typeof v === 'function' || typeof v === 'symbol' || v === undefined)
+      throw new Error('配置含函数或不可序列化值，不支持通过 API 写回');
+    return v;
+  }, 2);
+  return '// 由配置管理 API 更新（PATCH /api/extensions/:id/config）\nexport default ' + json + ';\n';
+}
+
+// 扩展公开视图：过滤 mod/ctx（函数/socket），只暴露可序列化元数据与能力标志
+function publicExtension(e, rt) {
+  const out = {
+    id: e.id,
+    kind: e.kind,
+    name: e.name,
+    path: e.path,
+    description: e.description,
+    author: e.author,
+    requires: Array.isArray(e.requires) ? e.requires : [],
+    enabled: e.enabled !== false,
+    loaded: !!rt,
+  };
+  if (rt) {
+    out.hooks = {
+      onRequest: typeof rt.mod?.onRequest === 'function',
+      onReady: typeof rt.mod?.onReady === 'function',
+      onMessage: typeof rt.mod?.onMessage === 'function',
+    };
+    out.config = rt.config || {};
+  } else if (e.kind === 'exjs') {
+    out.config = e.config || {};
+  }
+  return out;
 }

@@ -103,7 +103,7 @@ curl -X POST http://localhost:3000/api/bus/broadcast \
 ```
 
 - **默认关闭**（最小授权）：需 `security.apiBroadcast: true` 或 `NEX_API_BROADCAST=1`，或用策略 API 开启（需 `apiWritable`）。
-- 保留的内部事件（`__nex:reload`、`log:event`、`subpage:open:ok` 等）禁止外部伪造，返回 403。
+- 保留的内部事件禁止外部伪造，返回 403：`__nex:reload`、`log:event`、`log:cleared`、`security-policy-changed`、`config-changed`、`extension-toggled`、`extension-config-changed`、`subpage:open:ok`、`server-ready`、`server-pong`、`server-stream:echo`。
 - 客户端收到的信封带 `_from: "http"` 标记，便于区分来源。
 - 连接可见性：`GET /api/bus/clients` 查看当前连接数与元信息。
 

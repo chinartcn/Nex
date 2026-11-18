@@ -65,10 +65,14 @@ canWriteFs(extId) {
 | 端点 | 方法 | 说明 |
 | --- | --- | --- |
 | `/api/security` | GET | 返回当前策略（`toJSON()`，含 `fsWriteDefault`） |
-| `/api/security/policy` | POST | 运行时补丁；**受 `apiWritable` 门控**，默认 403 |
+| `/api/security/policy` | POST | 运行时策略补丁；**受 `apiWritable` 门控**，默认 403 |
+| `/api/config` | PATCH | 运行时配置补丁（白名单字段）；**受 `apiWritable` 门控**，默认 403 |
+| `/api/extensions/<id>/config` | PATCH | 扩展配置写回 `.js` 文件；**受 `apiWritable` 门控**，默认 403 |
 | `/api/fs/write` | POST | FS 写门禁演示 |
 
 `POST /api/security/policy` 接受 `application/x-www-form-urlencoded`，例如 `fsWrite=true`、`allowFsWrite=exserver:example-ext,exserver:other`、`apiBroadcast=true`。仅当全局 `security.apiWritable === true` 时才允许，否则 403。成功后经总线广播 `security-policy-changed`。
+
+**`apiWritable` 统一门控三个写端点**：`/api/security/policy`、`/api/config`、`/api/extensions/<id>/config`，默认全部 403。只读端点（含 `GET /api/config`）始终开放，但配置中的敏感键值会被脱敏为 `***`。这是"默认最小授权"在配置管理面的体现。
 
 ### 环境变量覆盖（便于部署与测试）
 
@@ -82,7 +86,7 @@ canWriteFs(extId) {
 
 ### HTTP 广播门禁
 
-`POST /api/bus/broadcast` 受 `apiBroadcast` 门控（默认关）。未开启返回 403；开启后仍禁止外部伪造保留事件（`__nex:reload` 等）。这是"默认最小授权"在广播能力上的体现。
+`POST /api/bus/broadcast` 受 `apiBroadcast` 门控（默认关）。未开启返回 403；开启后仍禁止外部伪造保留事件，包括 `__nex:reload`、`log:event`、`security-policy-changed`、`config-changed`、`extension-toggled`、`extension-config-changed` 等内部信号。这是"默认最小授权"在广播能力上的体现。
 
 ## 扩展如何定义安全策略
 

@@ -457,7 +457,175 @@ async function broadcastSuite(mode) {
   } catch (e) {
     await s.test('开启实例启动', (t) => t.check(false, e.message + '\n' + srv2.log));
   } finally {
-    srv2.stop();
+    await srv2.stop();
+  }
+  return s;
+}
+
+/* ─────────────── 扩展管理 API ─────────────── */
+async function extensionSuite(base, mode) {
+  const s = new Suite(`扩展管理 API（详情/配置/启停）[${mode}]`);
+  const get = (p) => http(base + p);
+  const patch = (p, body) => http(base + p, { method: 'PATCH', body, headers: { 'content-type': 'application/json' } });
+  const EXT = encodeURIComponent('exserver:markdown-render');
+
+  await s.test('GET /api/extensions/:id — 详情含元数据/能力/配置', async (t) => {
+    const r = await get('/api/extensions/' + EXT);
+    t.equal(r.status, 200, 'status 200');
+    const j = r.json();
+    t.equal(j.id, 'exserver:markdown-render', 'id 正确');
+    t.equal(j.kind, 'exserver', 'kind 正确');
+    t.equal(j.loaded, true, 'loaded=true');
+    t.check(j.hooks && j.hooks.onRequest === true, '暴露 onRequest 能力标志');
+    t.check(j.config && j.config.accentHeading === '#4f6ef7', '含运行时配置');
+    t.check(Array.isArray(j.requires), 'requires 为数组');
+    t.check(!('mod' in j) && !('ctx' in j), '不泄漏 mod/ctx 内部对象');
+  });
+  await s.test('GET /api/extensions/:id/config — 返回配置文件内容', async (t) => {
+    const r = await get('/api/extensions/' + EXT + '/config');
+    t.equal(r.status, 200, 'status 200');
+    const j = r.json();
+    t.include(j.file, 'server.conf.js', 'file 指向 server.conf.js');
+    t.check(j.config && j.config.maxBytes > 0, '含 maxBytes 配置');
+  });
+  await s.test('GET 不存在的扩展 → 404', async (t) => {
+    const r = await get('/api/extensions/no-such-ext');
+    t.equal(r.status, 404, 'status 404');
+  });
+  await s.test('PATCH 扩展配置默认被门控拒绝（403）', async (t) => {
+    const r = await patch('/api/extensions/' + EXT + '/config', JSON.stringify({ maxBytes: 1 }));
+    t.equal(r.status, 403, 'status 403');
+    t.include(r.text, 'apiWritable', '提示开启 apiWritable');
+  });
+  await s.test('toggle 显式 enabled 幂等置位', async (t) => {
+    const id = encodeURIComponent('exjs:example-ext');
+    const before = (await get('/api/extensions/' + id)).json().enabled;
+    const off = await http(base + '/api/extensions/toggle', {
+      method: 'POST', body: `id=${id}&enabled=false`,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    t.equal(off.status, 200, '置 false = 200');
+    t.equal(off.json().extension.enabled, false, 'enabled=false');
+    const again = await http(base + '/api/extensions/toggle', {
+      method: 'POST', body: `id=${id}&enabled=false`,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    t.equal(again.json().extension.enabled, false, '重复置 false 仍 false（幂等）');
+    // 恢复原状态，避免影响 Exjs 相关测试
+    await http(base + '/api/extensions/toggle', {
+      method: 'POST', body: `id=${id}&enabled=${before}`,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+  });
+  await s.test('/api/routes 含扩展管理与配置端点', async (t) => {
+    const paths = (await get('/api/routes')).json().routes.map((x) => x.path);
+    for (const p of ['/api/extensions/:id', '/api/extensions/:id/config', '/api/config']) {
+      t.check(paths.includes(p), `清单含 ${p}`);
+    }
+  });
+  return s;
+}
+
+/* ─────────────── 配置自省 API ─────────────── */
+async function configSuite(base, mode) {
+  const s = new Suite(`配置自省 API（脱敏/门控）[${mode}]`);
+  const get = (p) => http(base + p);
+
+  await s.test('GET /api/config — 结构/运行时/说明', async (t) => {
+    const r = await get('/api/config');
+    const j = r.json();
+    t.equal(r.status, 200, 'status 200');
+    t.check(j.config && j.config.site && j.config.site.title, '含站点配置');
+    const health = (await get('/api/health')).json();
+    t.equal(j.runtime.mode, health.mode, 'runtime.mode 与健康检查一致');
+    t.equal(j.runtime.apiWritable, false, '默认 apiWritable=false');
+    t.check(typeof j.runtime.security === 'object', 'runtime 含安全策略摘要');
+    t.include(j.note, '重启失效', '注明内存态语义');
+  });
+  await s.test('PATCH /api/config 默认被门控拒绝（403）', async (t) => {
+    const r = await http(base + '/api/config', {
+      method: 'PATCH', body: JSON.stringify({ 'site.title': 'x' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    t.equal(r.status, 403, 'status 403');
+  });
+  await s.test('redact() 敏感键脱敏且过滤函数', async (t) => {
+    const { redact } = await import('../src/server.js');
+    const out = redact({
+      token: 'abc', nested: { password: 'p', safe: 1 },
+      arr: [{ secret: 's' }], fn: () => {}, nil: null,
+    });
+    t.equal(out.token, '***', '顶层 token 脱敏');
+    t.equal(out.nested.password, '***', '嵌套 password 脱敏');
+    t.equal(out.nested.safe, 1, '普通字段保留');
+    t.equal(out.arr[0].secret, '***', '数组内 secret 脱敏');
+    t.equal(out.nil, null, 'null 保留');
+    t.check(!('fn' in out), '函数字段被过滤');
+  });
+  return s;
+}
+
+/* ─────────────── 配置管理写路径（独立开启 apiWritable 实例） ─────────────── */
+async function managementWriteSuite(mode) {
+  const s = new Suite(`配置管理写路径（apiWritable=1）[${mode}]`);
+  const base = 'http://localhost:3101';
+  const EXT = encodeURIComponent('exserver:markdown-render');
+  const confPath = path.join(ROOT, 'Exserver', 'markdown-render', 'server.conf.js');
+  let backup = null;
+  try { backup = fs.readFileSync(confPath, 'utf8'); } catch {}
+  // 写路径与 dev/prod 无关，固定用 prod 实例，避免 dev 下重复启动 Vite 造成端口争用
+  const srv = startServer({ mode: 'prod', cwd: ROOT, env: { NEX_API_WRITABLE: '1', NEX_PORT: '3101' } });
+  const patch = (p, obj) => http(base + p, {
+    method: 'PATCH', body: JSON.stringify(obj), headers: { 'content-type': 'application/json' },
+  });
+  try {
+    await srv.waitReady(base + '/api/health');
+    await s.test('PATCH 扩展配置：写回文件 + 读回一致', async (t) => {
+      const r = await patch('/api/extensions/' + EXT + '/config', { maxBytes: 99999 });
+      t.equal(r.status, 200, 'status 200');
+      t.equal(r.json().config.maxBytes, 99999, '响应含新值');
+      t.include(fs.readFileSync(confPath, 'utf8'), '99999', '磁盘文件已写回');
+      const read = (await http(base + '/api/extensions/' + EXT + '/config')).json();
+      t.equal(read.config.maxBytes, 99999, '再次读取一致');
+      const other = (await http(base + '/api/extensions/' + EXT + '/config')).json();
+      t.equal(other.config.accentHeading, '#4f6ef7', '未提交的字段保持不变');
+    });
+    await s.test('PATCH /api/config：site 字段即时生效', async (t) => {
+      const r = await patch('/api/config', { 'site.title': 'Nex Test', 'site.accent': '#123456' });
+      t.equal(r.status, 200, 'status 200');
+      const j = r.json();
+      t.equal(j.config.site.title, 'Nex Test', 'title 已更新');
+      t.equal(j.persistent, false, '标注非持久化');
+      const reread = (await http(base + '/api/config')).json();
+      t.equal(reread.config.site.accent, '#123456', '再次读取仍为新值');
+    });
+    await s.test('PATCH /api/config：home.file 下一次请求即生效', async (t) => {
+      const r = await patch('/api/config', { 'home.file': 'page/a2/index.html' });
+      t.equal(r.status, 200, 'status 200');
+      const home = (await http(base + '/api/home')).json().home;
+      t.equal(home, 'page/a2/index.html', '/api/home 反映新主页');
+      const index = await http(base + '/');
+      t.include(index.text, 'A2', '主页内容切换为 a2（运行时生效）');
+    });
+    await s.test('非法字段整批拒绝（400，无部分生效）', async (t) => {
+      const r = await patch('/api/config', { 'site.title': 'should-not-apply', 'security.apiWritable': false });
+      t.equal(r.status, 400, 'status 400');
+      const after = (await http(base + '/api/config')).json();
+      t.equal(after.config.site.title, 'Nex Test', '非法批次未部分生效');
+    });
+    await s.test('空 patch / 非对象 body 返回 400', async (t) => {
+      const empty = await patch('/api/config', {});
+      t.equal(empty.status, 400, '空对象 400');
+      const arr = await http(base + '/api/config', {
+        method: 'PATCH', body: '[]', headers: { 'content-type': 'application/json' },
+      });
+      t.equal(arr.status, 400, '数组 body 400');
+    });
+  } catch (e) {
+    await s.test('独立实例启动', (t) => t.check(false, e.message + '\n' + srv.log));
+  } finally {
+    await srv.stop();
+    if (backup !== null) fs.writeFileSync(confPath, backup, 'utf8'); // 无论成败都还原配置文件
   }
   return s;
 }
@@ -523,9 +691,12 @@ async function runMode(mode) {
     suites.push(await securitySuite(base));
     suites.push(await wsSuite(base));
     suites.push(await observabilitySuite(base));
+    suites.push(await extensionSuite(base, mode));
+    suites.push(await configSuite(base, mode));
     suites.push(await browserSuite(base, mode));
-    // 广播套件自带独立实例（开启 apiWritable），放在主服务仍在运行时之后
+    // 两个套件各带独立实例（3100 / 3101），放在主服务仍在运行时之后
     suites.push(await broadcastSuite(mode));
+    suites.push(await managementWriteSuite(mode));
 
     if (mode === 'dev') {
       const vite = new Suite(`Vite 开发服务器 [http://localhost:3001]`);
@@ -550,7 +721,7 @@ async function runMode(mode) {
     await s.test('服务可启动并响应', (t) => t.check(false, e.message + '\n' + srv.log));
     suites.push(s);
   } finally {
-    srv.stop();
+    await srv.stop();
   }
   return suites;
 }

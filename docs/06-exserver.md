@@ -111,6 +111,31 @@ export default {
 
 > 配置应为纯配置对象（无相对 import），才能用 data URL 求值。复杂逻辑请放进 `index.js`。
 
+### 通过 API 查看与管理扩展
+
+扩展元数据、能力标志与运行时配置可通过 HTTP 只读查看：
+
+```bash
+curl http://localhost:3000/api/extensions                                   # 全部扩展
+curl http://localhost:3000/api/extensions/exserver%3Amarkdown-render        # 单扩展详情
+curl http://localhost:3000/api/extensions/exserver%3Amarkdown-render/config  # 配置文件内容
+```
+
+详情返回 `id / kind / name / enabled / loaded / hooks / config`，不含 `mod` / `ctx` 内部对象（函数、socket 不可序列化）。
+
+运行时改写配置需先开启 `security.apiWritable`（默认关闭，见 [安全策略](10-security.md)）：
+
+```bash
+curl -X PATCH -H 'content-type: application/json' \
+  -d '{"maxBytes": 524288}' \
+  http://localhost:3000/api/extensions/exserver%3Amarkdown-render/config
+```
+
+- JSON 对象与现有配置**浅合并**后写回 `server.conf.js`，磁盘内容随即更新；未提交的字段保持不变。
+- 含函数 / 不可序列化值会被拒绝（400）——写回采用 JSON 序列化，扩展回调请放在 `index.js`。
+- 成功后同步内存态并广播 `extension-config-changed` 与 `__nex:reload`（前端自动刷新）。
+- `POST /api/extensions/toggle` 支持 `id=<id>&enabled=true|false` 显式置位（幂等），不传 `enabled` 仍为切换；两者都只改内存态。
+
 ## 示例：Markdown 渲染器
 
 `Exserver/markdown-render` 演示了：

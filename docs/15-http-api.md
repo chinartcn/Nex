@@ -45,6 +45,38 @@
 
 > 指标为**进程内存态**，重启清零；`recent` 只保留最近 20 条，用于排障。
 
+## 配置自省与运行时变更
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/config` | GET | 脱敏后的当前生效配置 + 运行时摘要（排障用） |
+| `/api/config` | PATCH | 运行时配置补丁；**受 `security.apiWritable` 门控，默认 403** |
+
+`GET /api/config` 结构：
+
+```json
+{
+  "config": { "mode": "prod", "server": {...}, "site": {...}, "home": {...} },
+  "runtime": { "mode": "prod", "port": 3000, "apiWritable": false, "security": {...} },
+  "note": "运行时快照；PATCH 仅内存态生效，重启失效"
+}
+```
+
+- 递归脱敏：`token` / `secret` / `password` / `apiKey` 等敏感键名的**值**替换为 `***`；函数字段被过滤。
+- `PATCH` 只接受白名单字段：`site.title`、`site.description`、`site.accent`、`home.file`。含非法字段则**整批拒绝（400）**，不会部分生效。
+- 变更仅改内存态，`persistent: false`，重启失效；`home.file` 改动下一次 `/` 请求即生效（主页面路由实时读取配置）。
+- 成功后广播 `config-changed` 事件。
+
+```bash
+# 默认拒绝
+curl -X PATCH -H 'content-type: application/json' -d '{"site.title":"X"}' http://localhost:3000/api/config   # 403
+
+# 开启 apiWritable 后（配置文件 / NEX_API_WRITABLE=1 / 策略 API）
+curl -X PATCH -H 'content-type: application/json' -d '{"home.file":"page/a2/index.html"}' http://localhost:3100/api/config
+```
+
+详见 [配置体系](03-configuration.md)。
+
 ## 总线广播（HTTP 触发）
 
 | 端点 | 方法 | 说明 |
@@ -76,12 +108,35 @@
 
 | 端点 | 方法 | 说明 |
 | --- | --- | --- |
-| `/api/extensions` | GET | 全部已发现扩展（含禁用者） |
-| `/api/extensions/toggle` | POST | 启停：`id=<ext-id>`（urlencoded），仅内存态 |
+| `/api/extensions` | GET | 全部已发现扩展（公开视图，含禁用者） |
+| `/api/extensions/<id>` | GET | 单扩展详情：元数据 + 能力标志 + 运行时配置；不存在 404 |
+| `/api/extensions/<id>/config` | GET | 读取扩展配置文件（`server.conf.js` / `conf.js`）内容 |
+| `/api/extensions/<id>/config` | PATCH | 更新扩展配置并写回 `.js` 文件；**受 `apiWritable` 门控，默认 403** |
+| `/api/extensions/toggle` | POST | 启停：`id=<ext-id>`（urlencoded）；可加 `enabled=true\|false` 显式置位（幂等），仅内存态 |
 | `/api/exjs` | GET | Exjs 清单；dev 经 Vite 代理时含源码清单与 `pageExjs`；prod 含 `bundles`/`pages` |
 | `/api/manifest` | GET | 构建 manifest（prod）；未构建返回 404 |
 | `/api/pages` | GET | 子页清单 |
 | `/api/home` | GET | 当前解析到的主页路径字符串 |
+
+**扩展详情示例**（`id` 含冒号，URL 中建议 `encodeURIComponent`）：
+
+```json
+{
+  "id": "exserver:markdown-render", "kind": "exserver", "name": "Markdown 渲染（教学）",
+  "path": "Exserver/markdown-render", "enabled": true, "loaded": true,
+  "hooks": { "onRequest": true, "onReady": false, "onMessage": false },
+  "config": { "enabled": true, "options": {}, "accentHeading": "#4f6ef7", "maxBytes": 262144 }
+}
+```
+
+> 详情只暴露可序列化的公开字段，不含扩展的 `mod` / `ctx`（函数、socket 等内部对象）。
+
+`PATCH /api/extensions/<id>/config` 接受 JSON 对象，与现有配置**浅合并**后写回配置文件：
+- 写回前拒绝函数/不可序列化值（400），避免静默丢失扩展配置里的回调；
+- 写回成功后同步内存态，并广播 `extension-config-changed` 与 `__nex:reload`（前端自动刷新）；
+- 配置文件路径由注册表元数据推导（仅取目录名），不接受请求夹带路径。
+
+详见 [Exserver 扩展](06-exserver.md)。
 
 ## 日志
 
@@ -129,6 +184,11 @@ curl http://localhost:3000/api/pages
 curl http://localhost:3000/api/exjs
 curl http://localhost:3000/api/manifest
 curl http://localhost:3000/api/security
+curl http://localhost:3000/api/health
+curl http://localhost:3000/api/stats
+curl http://localhost:3000/api/config
+curl http://localhost:3000/api/extensions/exserver%3Amarkdown-render
+curl http://localhost:3000/api/extensions/exserver%3Amarkdown-render/config
 curl -X POST -d 'ext=x' http://localhost:3000/api/fs/write      # 403
 curl -o /dev/null -w '%{http_code}' http://localhost:3000/admin  # 403
 curl -F name=nex http://localhost:3000/api/form
